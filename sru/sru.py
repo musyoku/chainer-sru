@@ -10,14 +10,14 @@ def Convolution1D(in_channels, out_channels, ksize, stride=1, pad=0, initialW=No
 
 class SRU(link.Chain):
 	def __init__(self, in_channels, out_channels, use_tanh=False):
-		self.num_split = len(pooling) + 1
 		if True:
 			initialW = initializers.Uniform(scale=0.05)
 		else:
 			wstd = math.sqrt(in_channels)
 			initialW = initializers.Normal(wstd)
-		super().__init__(W=Convolution1D(in_channels, 3 * out_channels, 1, stride=1, pad=0, initialW=initializers.Normal(wstd)),
-			bf=Bias(shape=(in_channels,)), br=Bias(shape=(in_channels,)))
+		super().__init__(W=Convolution1D(in_channels, 3 * out_channels, 1, stride=1, pad=0, initialW=initialW),
+			bf=Bias(shape=(out_channels,)), br=Bias(shape=(out_channels,)))
+		self.use_highway_connections = in_channels == out_channels
 		self.use_tanh = use_tanh
 		self.reset_state()
 
@@ -29,8 +29,8 @@ class SRU(link.Chain):
 		for t in range(length):
 			xt = X[..., t]
 			zt = Z[..., t]
-			ft = F[..., t] + self.bf
-			rt = F[..., t] + self.br
+			ft = self.bf(F[..., t])
+			rt = self.br(F[..., t])
 
 			if self.ct is None:
 				self.ct = (1 - ft) * zt
@@ -40,8 +40,10 @@ class SRU(link.Chain):
 			if self.use_tanh:
 				self.ct = functions.tanh(self.ct)
 
-			self.ht = rt * self.ct + (1 - rt) * xt
-
+			self.ht = rt * self.ct
+			if self.use_highway_connections:
+				self.ht +=  (1 - rt) * xt
+				
 			if self.H is None:
 				self.H = functions.expand_dims(self.ht, 2)
 			else:
