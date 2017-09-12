@@ -1,9 +1,6 @@
-import math
-import numpy as np
-import chainer
-from chainer import cuda, Variable, function, link, functions, links, initializers
-from chainer.utils import type_check
-from chainer.links import EmbedID, Linear, BatchNormalization, ConvolutionND, Bias
+import chainer, math
+from chainer import cuda, link, functions, initializers
+from chainer.links import ConvolutionND, Bias
 
 def Convolution1D(in_channels, out_channels, ksize, stride=1, pad=0, initialW=None):
 	return ConvolutionND(1, in_channels, out_channels, ksize, stride=stride, pad=pad, initialW=initialW)
@@ -42,7 +39,7 @@ class SRU(link.Chain):
 
 			self.ht = rt * self.ct
 			if self.use_highway_connections:
-				self.ht +=  (1 - rt) * xt
+				self.ht += (1 - rt) * xt
 
 			if self.H is None:
 				self.H = functions.expand_dims(self.ht, 2)
