@@ -9,7 +9,7 @@ from sru import SRU
 
 # @profile
 def main():
-	gpu_device = 1
+	gpu_device = 0
 	# Chainer
 	with xp.cuda.Device(gpu_device):
 		data = xp.random.normal(0, 1, size=(48, 128, 50)).astype(xp.float32)

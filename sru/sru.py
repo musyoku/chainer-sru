@@ -1,6 +1,81 @@
+import cupy
 from chainer import link, initializers, variable, cuda
 from chainer.functions.connection import convolution_nd
 from chainer.utils import conv_nd, type_check
+from cupy.cuda import function
+from pynvrtc.interface import NVRTCInterface, NVRTCException
+
+CUDA_SRU_KERNEL = """
+extern "C" 
+{
+	__forceinline__ __device__ 
+	float sigmoidf(float x)
+	{
+		return 1.f / (1.f + expf(-x));
+	}
+
+	__global__ 
+	void forward(const float* __restrict__ u, const float* __restrict__ x,
+		const float* __restrict__ bias, const float* __restrict__ init,
+		const float* __restrict__ mask_h,
+		const int len, const int batch, const int d, const int k,
+		float* __restrict__ h, float* __restrict__ c,
+		const int use_tanh)
+	{
+		assert ((k == 3) || (x == NULL));
+
+		int ncols = batch*d;
+		int col = blockIdx.x * blockDim.x + threadIdx.x;
+		if (col >= ncols) return;
+
+		int ncols_u = ncols*k;
+		int ncols_x = (k == 3) ? ncols : ncols_u;
+
+		const float bias1 = *(bias + (col%d));
+		const float bias2 = *(bias + (col%d) + d);
+		const float mask = (mask_h == NULL) ? 1.0 : (*(mask_h + col));
+		float cur = *(init + col);
+
+		const float* up = u + (col*k);
+		const float* xp = (k == 3) ? (x + col) : (up + 3);
+		float* cp = c + col;
+		float* hp = h + col;
+
+		for (int row = 0; row < len; ++row)
+		{
+			float g1 = sigmoidf((*(up+1))+bias1);
+			float g2 = sigmoidf((*(up+2))+bias2);
+			cur = (cur-(*up))*g1 + (*up);
+			*cp = cur;
+			float val = use_tanh ? tanh(cur) : cur;
+			*hp = (val*mask-(*xp))*g2 + (*xp);
+			up += ncols_u;
+			xp += ncols_x;
+			cp += ncols;
+			hp += ncols;
+		}
+	}
+}
+"""
+
+# hack
+# tmp = cupy.random.uniform()
+
+interface = NVRTCInterface("/usr/local/cuda/lib64/libnvrtc.so")
+
+try:
+	prog = interface.nvrtcCreateProgram(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"), [], []);
+	interface.nvrtcCompileProgram(prog, ["-ftz=true".encode("utf-8")])
+	ptx = interface.nvrtcGetPTX(prog)
+	module = function.Module()
+	module.load(bytes(ptx.encode()))
+	SRU_FWD_FUNC = SRU_MOD.get_function('sru_forward')
+	SRU_BWD_FUNC = SRU_MOD.get_function('sru_bwd')
+	SRU_BiFWD_FUNC = SRU_MOD.get_function('sru_bi_fwd')
+	SRU_BiBWD_FUNC = SRU_MOD.get_function('sru_bi_bwd')
+except NVRTCException as e:
+	print("Error: %s" % repr(e))
+
 
 class SRUFunction(convolution_nd.ConvolutionND):
 	def __init__(self, cover_all=False):
