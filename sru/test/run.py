@@ -10,9 +10,12 @@ from sru import SRU
 # @profile
 def main():
 	gpu_device = 0
+	seq_length = 50
+	batchsize = 48
+	feature_dimension = 128
 	# Chainer
 	with xp.cuda.Device(gpu_device):
-		data = xp.random.normal(0, 1, size=(48, 128, 50)).astype(xp.float32)
+		data = xp.random.normal(0, 1, size=(batchsize, seq_length, feature_dimension)).astype(xp.float32)
 		# SRU
 		layer = SRU(128, 128)
 		layer.to_gpu(gpu_device)
@@ -23,14 +26,14 @@ def main():
 		layer = NaiveSRU(128, 128)
 		layer.to_gpu(gpu_device)
 		for _ in range(10):
-			h = layer(data)
+			h = layer(data.transpose((0, 2, 1)))
 			layer.reset_state()
 		# LSTM
 		layer = links.LSTM(128, 128)
 		layer.to_gpu(gpu_device)
 		for _ in range(10):
-			for t in range(data.shape[2]):
-				h = layer(data[..., t])
+			for t in range(seq_length):
+				h = layer(data[:, t])
 			layer.reset_state()
 	# PyTorch
 	with torch.cuda.device(gpu_device):
@@ -44,7 +47,7 @@ def main():
 		)
 		rnn.cuda()
 		for _ in range(10):
-			output, hidden = rnn(Variable(torch.FloatTensor(50, 48, 128).cuda()))
+			output, hidden = rnn(Variable(torch.FloatTensor(seq_length, batchsize, feature_dimension).cuda()))
 
 if __name__ == "__main__":
 	main()
