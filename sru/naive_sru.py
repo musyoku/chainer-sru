@@ -33,7 +33,7 @@ class SRU(link.Chain):
 			rt = self.br(F[..., t])
 
 			if self.ct is None:
-				self.ct = (1 - ft) * zt
+				self.ct = zt
 			else:
 				self.ct = ft * self.ct + (1 - ft) * zt
 
