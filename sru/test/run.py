@@ -4,9 +4,9 @@ from chainer import links
 import torch
 from torch.autograd import Variable
 sys.path.append(os.path.join(".."))
-from sru import SRU
+from naive_sru import SRU
 
-@profile
+# @profile
 def main():
 	gpu_device = 1
 	# Chainer

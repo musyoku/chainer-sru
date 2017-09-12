@@ -43,7 +43,7 @@ class SRU(link.Chain):
 			self.ht = rt * self.ct
 			if self.use_highway_connections:
 				self.ht +=  (1 - rt) * xt
-				
+
 			if self.H is None:
 				self.H = functions.expand_dims(self.ht, 2)
 			else:
