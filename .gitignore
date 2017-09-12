@@ -1,0 +1,10 @@
+# ignore all
+*
+
+# allow any
+!*/
+!*.py
+!*.pyx
+!*.md
+!.gitignore
+!triphone.list
