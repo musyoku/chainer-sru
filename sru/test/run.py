@@ -4,7 +4,8 @@ from chainer import links
 import torch
 from torch.autograd import Variable
 sys.path.append(os.path.join(".."))
-from naive_sru import SRU
+from naive_sru import SRU as NaiveSRU
+from sru import SRU
 
 # @profile
 def main():
@@ -14,6 +15,12 @@ def main():
 		data = xp.random.normal(0, 1, size=(48, 128, 50)).astype(xp.float32)
 		# SRU
 		layer = SRU(128, 128)
+		layer.to_gpu(gpu_device)
+		for _ in range(10):
+			h = layer(data)
+			layer.reset_state()
+		# SRU
+		layer = NaiveSRU(128, 128)
 		layer.to_gpu(gpu_device)
 		for _ in range(10):
 			h = layer(data)
