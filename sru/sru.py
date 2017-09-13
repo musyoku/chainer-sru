@@ -1,4 +1,5 @@
 import cupy
+import numpy as np
 from chainer import link, initializers, variable, cuda, Function
 from chainer.utils import conv_nd, type_check
 from cupy.cuda import function, Stream
@@ -18,32 +19,42 @@ extern "C"
 	__global__ 
 	void forward(const float* __restrict__ x_ptr, const float* __restrict__ u_ptr, const float* __restrict__ bias_ptr, 
 		float* __restrict__ context_ptr, float* __restrict__ hidden_state_ptr, 
-		const int batchsize, const int feature_dimension, const int sequence_length, const int use_tanh)
+		const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
 	{
 		int column = blockIdx.x * blockDim.x + threadIdx.x;
 		int total_columns = batchsize * feature_dimension;
 		if(column >= total_columns) return;
+		int batch_index = column / feature_dimension;
 
 		const float bf = *(bias_ptr + column % feature_dimension);
 		const float br = *(bias_ptr + column % feature_dimension + feature_dimension);
 		const float* w_ptr = u_ptr + column * 3;
 		float* ct_ptr = context_ptr + column;
 		float ct = *(ct_ptr);
-		float* ht_ptr = hidden_state_ptr + column;
-		const float* xt_ptr = x_ptr + column;
+		float* ht_ptr = hidden_state_ptr + column * seq_length;
+		const float* xt_ptr = x_ptr + column * seq_length;
 
-        for(int t = 0;t < sequence_length;t++)
+
+		const float* wr_ptr = u_ptr + column % feature_dimension * seq_length;
+		const float* wf_ptr = u_ptr + column % feature_dimension * seq_length + feature_dimension * seq_length;
+		const float* z_ptr = u_ptr + column % feature_dimension * seq_length + feature_dimension * seq_length * 2;
+
+		*context_ptr = 1;
+		*(ht_ptr) = *context_ptr;
+		return;
+
+        for(int t = 0;t < seq_length;t++)
         {
-	        float zt = *(w_ptr);
-            float ft = sigmoidf((*(w_ptr + 1)) + bf);
-            float rt = sigmoidf((*(w_ptr + 2)) + br);
+	        float zt = *(z_ptr);
+            float ft = sigmoidf((*(wf_ptr)) + bf);
+            float rt = sigmoidf((*(wr_ptr)) + br);
             ct = ft * (ct - zt) + zt;
             *ct_ptr = ct;
             float g_ct = use_tanh ? tanh(ct) : ct;
             float xt = *xt_ptr;
             *ht_ptr = rt * (g_ct - xt) + xt;
+            ht_ptr += 1;
         }
-		*(hidden_state_ptr + column * sequence_length) = *(w_ptr);
 	}
 }
 """
@@ -55,7 +66,6 @@ prog = Program(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"))
 cuda_module = function.Module()
 cuda_module.load(bytes(prog.compile().encode("utf-8")))
 cuda_forward_func = cuda_module.get_function("forward")
-cuda_stream = Stream()
 
 # interface = NVRTCInterface()
 # prog = interface.nvrtcCreateProgram(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"), [], []);
@@ -77,16 +87,14 @@ class SRUFunction(Function):
 		x_type = in_types[0]
 		w_type = in_types[1]
 		b_type = in_types[2]
-		print("w_type")
-		print(w_type.shape)
 		type_check.expect(
 			x_type.dtype.kind == "f",
 			w_type.dtype.kind == "f",
 			b_type.dtype.kind == "f",
 			x_type.ndim == 3,
-			w_type.ndim == 3,
+			w_type.ndim == 2,
 			b_type.ndim == 1,
-			b_type.shape[0] == w_type.shape[0] // 3,
+			b_type.shape[0] * 3 == w_type.shape[0] * 2,
 		)
 
 		if type_check.eval(n_in) == 4:
@@ -97,30 +105,67 @@ class SRUFunction(Function):
 				ct_type.shape[0] == b_type.shape[0],
 			)
 
+	# x: (batchsize, seq_length, feature_dimension)
 	def forward_cpu(self, inputs):
-		raise NotImplementedError()
-			
+		x, W, b = inputs[:3]
+		batchsize, feature_dimension, seq_length = x.shape
+		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=x.dtype)
+
+		U = np.matmul(W, x)
+		return None,
+
+		Z, F, R = functions.split_axis(U, 3, axis=1)
+
+		length = X.shape[2]
+		for t in range(length):
+			xt = X[..., t]
+			zt = Z[..., t]
+			ft = self.bf(F[..., t])
+			rt = self.br(F[..., t])
+
+			if self.ct is None:
+				self.ct = zt
+			else:
+				self.ct = ft * self.ct + (1 - ft) * zt
+
+			if self.use_tanh:
+				self.ct = functions.tanh(self.ct)
+
+			self.ht = rt * self.ct
+			if self.use_highway_connections:
+				self.ht += (1 - rt) * xt
+
+			if self.H is None:
+				self.H = functions.expand_dims(self.ht, 2)
+			else:
+				self.H = functions.concat((self.H, functions.expand_dims(self.ht, 2)), axis=2)
+
+		return self.H
+
 	def forward_gpu(self, inputs):
-		x, U, b = inputs[:3]
-		xp = cuda.get_array_module(U)
-		batchsize = x.shape[0]
-		sequence_length = x.shape[2]
-		feature_dimension = U.shape[1] // 3
+		x, W, b = inputs[:3]
+		xp = cuda.get_array_module(W)
+		batchsize, feature_dimension, seq_length = x.shape
 		ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=x.dtype)
-		print(sequence_length)
-		print(feature_dimension)
+
+		U = xp.matmul(W, x)
+		print(U.shape)
+		print(U)
+
+
+		ct = xp.random.uniform(size=(batchsize, feature_dimension))
+		print(ct.data.ptr)
+		# ct = x[..., 0]
+		# print(ct.data.ptr)
+		print(ct)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
-		print(thread_per_block)
-		print(num_block)
 
-		b[0] = 1
-		b[1] = 2
-
-		H = xp.zeros((batchsize, feature_dimension, sequence_length), dtype=x.dtype)
-		print(H.shape)
+		H = xp.zeros((batchsize, feature_dimension, seq_length), dtype=x.dtype)
+		print(x.shape)
+		print(U.shape)
 		cuda_forward_func(args=[
 			x.data.ptr,
 			U.data.ptr,
@@ -129,11 +174,12 @@ class SRUFunction(Function):
 			H.data.ptr,
 			batchsize,
 			feature_dimension,
-			sequence_length,
+			seq_length,
 			self.use_tanh
 		], block=(thread_per_block, 1, 1), grid=(num_block, 1, 1))
 		import numpy
 		numpy.set_printoptions(suppress=True)
+		print(ct)
 		print(cuda.to_cpu(H).astype(numpy.float32))
 		raise Exception()
 		return U,
@@ -157,11 +203,13 @@ class SRU(link.Link):
 		self.out_channels = out_channels
 		self.use_tanh = use_tanh
 		self.ct = None
-		ksize = conv_nd.as_tuple(1, 1)
 
 		with self.init_scope():
-			self.U = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels) + ksize)
+			self.U = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels))
 			self.b = variable.Parameter(initializers._get_initializer(0), out_channels * 2)
 
 	def __call__(self, x):
 		return sru(x, self.U, self.b, self.ct, self.use_tanh)
+
+	def reset_state(self):
+		self.ct = None

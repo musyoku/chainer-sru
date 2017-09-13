@@ -1,20 +1,38 @@
 import sys, os
 import cupy as xp
-from chainer import links
+import numpy as np
+from chainer import links, cuda
 import torch
 from torch.autograd import Variable
 sys.path.append(os.path.join(".."))
 from naive_sru import SRU as NaiveSRU
-from sru import SRU
+
+def main():
+	gpu_device = 1
+	with xp.cuda.Device(gpu_device):
+		from sru import SRU
+	seq_length = 5
+	batchsize = 3
+	feature_dimension = 3
+	data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
+	# SRU
+	layer = SRU(3, 3)
+	h = layer(data)
+	layer.reset_state()
+	with xp.cuda.Device(gpu_device):
+		layer.to_gpu()
+		h = layer(cuda.to_gpu(data))
+		layer.reset_state()
 
 # @profile
-def main():
-	gpu_device = 0
+def profile():
+	gpu_device = 1
 	seq_length = 50
 	batchsize = 48
 	feature_dimension = 128
 	# Chainer
 	with xp.cuda.Device(gpu_device):
+		from sru import SRU
 		data = xp.random.normal(0, 1, size=(batchsize, seq_length, feature_dimension)).astype(xp.float32)
 		# SRU
 		layer = SRU(128, 128)
