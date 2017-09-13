@@ -26,7 +26,7 @@ def main():
 	# GPU (define-by-run)
 	layer = NaiveSRU(feature_dimension, feature_dimension)
 	layer.to_gpu(gpu_device)
-	for _ in range(10):
+	for _ in range(100):
 		h = layer(data_gpu)
 		layer.reset_state()
 
@@ -51,6 +51,14 @@ def main():
 		rnn.cuda()
 		for _ in range(100):
 			output, hidden = rnn(Variable(data_gpu_torch))
+
+	# LSTM (Chainer)
+	layer = links.LSTM(feature_dimension, feature_dimension)
+	layer.to_gpu(gpu_device)
+	for _ in range(100):
+		for t in range(seq_length):
+			h = layer(data_gpu[..., t])
+		layer.reset_state()
 
 	print(h_cpu)
 	print(h_gpu)

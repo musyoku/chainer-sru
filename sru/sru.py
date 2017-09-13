@@ -41,11 +41,11 @@ extern "C"
 			float zt = *(z_ptr);
 			float ft = sigmoidf((*(wf_ptr)) + bf);
 			float rt = sigmoidf((*(wr_ptr)) + br);
+			float xt = *xt_ptr;
 
 			ct = ft * (ct - zt) + zt;
-			*ct_ptr = ct;
 			ct = use_tanh ? tanh(ct) : ct;
-			float xt = *xt_ptr;
+			*ct_ptr = ct;
 			*ht_ptr = rt * (ct - xt) + xt;
 
 			ht_ptr += 1;
