@@ -2,10 +2,6 @@ import cupy
 import numpy as np
 from chainer import link, initializers, variable, cuda, Function
 from chainer.utils import conv_nd, type_check
-# from cupy.cuda import function
-# from pynvrtc.compiler import Program
-# from collections import namedtuple
-# from pynvrtc.interface import NVRTCInterface, NVRTCException
 
 CUDA_SRU_KERNEL = """
 extern "C" 
@@ -60,23 +56,6 @@ extern "C"
 	}
 }
 """
-
-# to avoid cupy.cuda.driver.CUDADriverError: CUDA_ERROR_NOT_INITIALIZED: initialization error
-# cupy.random.uniform()
-
-# prog = Program(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"))
-# cuda_module = function.Module()
-# cuda_module.load(bytes(prog.compile().encode("utf-8")))
-# cuda_forward_func = cuda_module.get_function("forward")
-
-# interface = NVRTCInterface()
-# prog = interface.nvrtcCreateProgram(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"), [], []);
-# interface.nvrtcCompileProgram(prog, ["-ftz=true".encode("utf-8")])
-# ptx = interface.nvrtcGetPTX(prog)
-# module = function.Module()
-# module.load(bytes(ptx.encode()))
-# cuda_forward_func = module.get_function('forward')
-
 def _cuda_elementwise(name, args, block, grid):
 	cuda_module = cupy.cuda.compile_with_cache(CUDA_SRU_KERNEL)
 	func = cuda_module.get_function(name)
