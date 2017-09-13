@@ -26,8 +26,8 @@ class SRU(link.Chain):
 		for t in range(length):
 			xt = X[..., t]
 			zt = Z[..., t]
-			ft = self.bf(F[..., t])
-			rt = self.br(F[..., t])
+			ft = functions.sigmoid(self.bf(F[..., t]))
+			rt = functions.sigmoid(self.br(F[..., t]))
 
 			if self.ct is None:
 				self.ct = zt

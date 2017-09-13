@@ -17,12 +17,15 @@ def main():
 	data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
 	# SRU
 	layer = SRU(3, 3)
-	h = layer(data)
+	h_cpu = layer(data)
 	layer.reset_state()
-	with xp.cuda.Device(gpu_device):
-		layer.to_gpu()
-		h = layer(cuda.to_gpu(data))
-		layer.reset_state()
+
+	layer.to_gpu(gpu_device)
+	h_gpu = layer(cuda.to_gpu(data, gpu_device))
+	layer.reset_state()
+	
+	print(h_cpu)
+	print(h_gpu)
 
 # @profile
 def profile():

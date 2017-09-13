@@ -28,33 +28,35 @@ extern "C"
 
 		const float bf = *(bias_ptr + column % feature_dimension);
 		const float br = *(bias_ptr + column % feature_dimension + feature_dimension);
-		const float* w_ptr = u_ptr + column * 3;
+
 		float* ct_ptr = context_ptr + column;
-		float ct = *(ct_ptr);
 		float* ht_ptr = hidden_state_ptr + column * seq_length;
 		const float* xt_ptr = x_ptr + column * seq_length;
 
+		float ct = *(ct_ptr);
 
-		const float* wr_ptr = u_ptr + column % feature_dimension * seq_length;
-		const float* wf_ptr = u_ptr + column % feature_dimension * seq_length + feature_dimension * seq_length;
-		const float* z_ptr = u_ptr + column % feature_dimension * seq_length + feature_dimension * seq_length * 2;
+		const float* wr_ptr = u_ptr + column % feature_dimension * seq_length + batch_index * 3 * feature_dimension * seq_length;
+		const float* wf_ptr = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 1) * feature_dimension * seq_length;
+		const float* z_ptr  = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 2) * feature_dimension * seq_length;
 
-		*context_ptr = 1;
-		*(ht_ptr) = *context_ptr;
-		return;
+		for(int t = 0;t < 1;t++)
+		{
+			float zt = *(z_ptr);
+			float ft = sigmoidf((*(wf_ptr)) + bf);
+			float rt = sigmoidf((*(wr_ptr)) + br);
 
-        for(int t = 0;t < seq_length;t++)
-        {
-	        float zt = *(z_ptr);
-            float ft = sigmoidf((*(wf_ptr)) + bf);
-            float rt = sigmoidf((*(wr_ptr)) + br);
-            ct = ft * (ct - zt) + zt;
-            *ct_ptr = ct;
-            float g_ct = use_tanh ? tanh(ct) : ct;
-            float xt = *xt_ptr;
-            *ht_ptr = rt * (g_ct - xt) + xt;
-            ht_ptr += 1;
-        }
+			ct = ft * (ct - zt) + zt;
+			*ct_ptr = ct;
+			ct = use_tanh ? tanh(ct) : ct;
+			float xt = *xt_ptr;
+			*ht_ptr = rt * (ct - xt) + xt;
+
+			ht_ptr += 1;
+			xt_ptr += 1;
+			wr_ptr += 1;
+			wf_ptr += 1;
+			z_ptr += 1;
+		}
 	}
 }
 """
@@ -74,6 +76,9 @@ cuda_forward_func = cuda_module.get_function("forward")
 # module = function.Module()
 # module.load(bytes(ptx.encode()))
 # cuda_forward_func = module.get_function('forward')
+
+def _np_sigmoid(x):
+	return 1 / (1 + np.exp(-x))
 
 class SRUFunction(Function):
 
@@ -107,67 +112,60 @@ class SRUFunction(Function):
 
 	# x: (batchsize, seq_length, feature_dimension)
 	def forward_cpu(self, inputs):
-		x, W, b = inputs[:3]
-		batchsize, feature_dimension, seq_length = x.shape
-		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=x.dtype)
+		X, W, b = inputs[:3]
+		batchsize, feature_dimension, seq_length = X.shape
+		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
-		U = np.matmul(W, x)
-		return None,
+		U = np.matmul(W, X)
+		print(U)
+		R, F, Z = np.split(U, 3, axis=1)
+		H = None
 
-		Z, F, R = functions.split_axis(U, 3, axis=1)
-
-		length = X.shape[2]
-		for t in range(length):
+		for t in range(1):
 			xt = X[..., t]
 			zt = Z[..., t]
-			ft = self.bf(F[..., t])
-			rt = self.br(F[..., t])
+			ft = _np_sigmoid(F[..., t] + b[:feature_dimension])
+			rt = _np_sigmoid(R[..., t] + b[feature_dimension:])
 
-			if self.ct is None:
-				self.ct = zt
-			else:
-				self.ct = ft * self.ct + (1 - ft) * zt
+			ct = ft * ct + (1 - ft) * zt
 
 			if self.use_tanh:
-				self.ct = functions.tanh(self.ct)
+				ct = np.tanh(ct)
 
-			self.ht = rt * self.ct
-			if self.use_highway_connections:
-				self.ht += (1 - rt) * xt
+			ht = rt * ct + (1 - rt) * xt
 
-			if self.H is None:
-				self.H = functions.expand_dims(self.ht, 2)
+			if H is None:
+				H = np.expand_dims(ht, 2)
 			else:
-				self.H = functions.concat((self.H, functions.expand_dims(self.ht, 2)), axis=2)
+				H = np.concatenate((H, np.expand_dims(ht, 2)), axis=2)
 
-		return self.H
+		return H,
 
 	def forward_gpu(self, inputs):
-		x, W, b = inputs[:3]
+		X, W, b = inputs[:3]
 		xp = cuda.get_array_module(W)
-		batchsize, feature_dimension, seq_length = x.shape
-		ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=x.dtype)
+		batchsize, feature_dimension, seq_length = X.shape
+		ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
-		U = xp.matmul(W, x)
-		print(U.shape)
-		print(U)
+		U = xp.matmul(W, X)
+		# print(U.shape)
+		# print(U)
 
 
-		ct = xp.random.uniform(size=(batchsize, feature_dimension))
-		print(ct.data.ptr)
-		# ct = x[..., 0]
+		# ct += xp.random.uniform(size=(batchsize, feature_dimension))
+		# ct = X[..., 0]
 		# print(ct.data.ptr)
-		print(ct)
+		# print(ct)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
 
-		H = xp.zeros((batchsize, feature_dimension, seq_length), dtype=x.dtype)
-		print(x.shape)
-		print(U.shape)
+		H = xp.zeros((batchsize, feature_dimension, seq_length), dtype=X.dtype)
+		# print(X.shape)
+		# print(U.shape)
 		cuda_forward_func(args=[
-			x.data.ptr,
+			X.data.ptr,
 			U.data.ptr,
 			b.data.ptr,
 			ct.data.ptr,
@@ -177,12 +175,11 @@ class SRUFunction(Function):
 			seq_length,
 			self.use_tanh
 		], block=(thread_per_block, 1, 1), grid=(num_block, 1, 1))
-		import numpy
-		numpy.set_printoptions(suppress=True)
-		print(ct)
-		print(cuda.to_cpu(H).astype(numpy.float32))
-		raise Exception()
-		return U,
+		# import numpy
+		# numpy.set_printoptions(suppress=True)
+		# print(ct)
+		# print(cuda.to_cpu(H).astype(numpy.float32))
+		return H,
 
 	def backward_cpu(self, inputs, grad_outputs):
 		raise NotImplementedError()
