@@ -2,6 +2,7 @@ import cupy
 import numpy as np
 from chainer import link, initializers, variable, cuda, Function
 from chainer.utils import conv_nd, type_check
+from cupy.cuda import compiler, function
 
 CUDA_SRU_KERNEL = """
 extern "C" 
@@ -56,9 +57,38 @@ extern "C"
 	}
 }
 """
+
+options = ["-ftz=true"]
+nvcc = None
+cupy_version = 0
+if hasattr(compiler, "compile_using_nvrtc"):	# CuPy v2
+	nvcc = compiler.compile_using_nvrtc
+	cupy_version = 2
+elif hasattr(compiler, "nvcc"):					# CuPy v1
+	nvcc = compiler.nvcc
+	cupy_version = 1
+else:
+	raise NotImplementedError()
+ptx = nvcc(CUDA_SRU_KERNEL, options, None)
+
+def _cuda_get_module():
+	module = function.Module()
+	
+	if cupy_version == 1:
+		module.load(ptx)
+		return module
+
+	if cupy_version == 2:
+		ls = function.LinkState()
+		ls.add_ptr_data(ptx, u"cupy.ptx")
+		module.load(ls.complete())
+		return module
+
+	raise NotImplementedError()
+
 def _cuda_elementwise(name, args, block, grid):
-	cuda_module = cupy.cuda.compile_with_cache(CUDA_SRU_KERNEL)
-	func = cuda_module.get_function(name)
+	module = _cuda_get_module()
+	func = module.get_function(name)
 	func(args=args, block=block, grid=grid)
 
 def _np_sigmoid(x):

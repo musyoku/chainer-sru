@@ -8,23 +8,53 @@ sys.path.append(os.path.join(".."))
 from naive_sru import SRU as NaiveSRU
 from sru import SRU
 
+@profile
 def main():
 	gpu_device = 0
-	seq_length = 5
-	batchsize = 3
-	feature_dimension = 3
-	data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
-	# SRU
-	layer = SRU(3, 3)
-	h_cpu = layer(data)
-	layer.reset_state()
+	seq_length = 50
+	batchsize = 48
+	feature_dimension = 128
+	data_cpu = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
+	data_gpu = cuda.to_gpu(data_cpu, gpu_device)
 
+	# CPU
+	layer = SRU(feature_dimension, feature_dimension)
+	for _ in range(100):
+		h_cpu = layer(data_cpu)
+		layer.reset_state()
+
+	# GPU (define-by-run)
+	layer = NaiveSRU(feature_dimension, feature_dimension)
 	layer.to_gpu(gpu_device)
-	h_gpu = layer(cuda.to_gpu(data, gpu_device))
-	layer.reset_state()
-	
+	for _ in range(10):
+		h = layer(data_gpu)
+		layer.reset_state()
+
+	# GPU (CUDA Kernel)
+	layer = SRU(feature_dimension, feature_dimension)
+	layer.to_gpu(gpu_device)
+	for _ in range(100):
+		h_gpu = layer(data_gpu)
+		layer.reset_state()
+
+	# GPU (PyTorch)
+	with torch.cuda.device(gpu_device):
+		from cuda_functional import SRU as PyTorchSRU
+		data_gpu_torch = torch.FloatTensor(seq_length, batchsize, feature_dimension).cuda()
+		rnn = PyTorchSRU(128, 128,
+			num_layers = 1,
+			dropout = 0.0,
+			rnn_dropout = 0.0,
+			use_tanh = 0,
+			bidirectional = False
+		)
+		rnn.cuda()
+		for _ in range(100):
+			output, hidden = rnn(Variable(data_gpu_torch))
+
 	print(h_cpu)
 	print(h_gpu)
+
 
 # @profile
 def profile():
