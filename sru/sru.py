@@ -62,12 +62,12 @@ extern "C"
 """
 
 # to avoid cupy.cuda.driver.CUDADriverError: CUDA_ERROR_NOT_INITIALIZED: initialization error
-cupy.random.uniform()
+# cupy.random.uniform()
 
-prog = Program(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"))
-cuda_module = function.Module()
-cuda_module.load(bytes(prog.compile().encode("utf-8")))
-cuda_forward_func = cuda_module.get_function("forward")
+# prog = Program(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"))
+# cuda_module = function.Module()
+# cuda_module.load(bytes(prog.compile().encode("utf-8")))
+# cuda_forward_func = cuda_module.get_function("forward")
 
 # interface = NVRTCInterface()
 # prog = interface.nvrtcCreateProgram(CUDA_SRU_KERNEL.encode("utf-8"), "sru.cu".encode("utf-8"), [], []);
@@ -76,6 +76,11 @@ cuda_forward_func = cuda_module.get_function("forward")
 # module = function.Module()
 # module.load(bytes(ptx.encode()))
 # cuda_forward_func = module.get_function('forward')
+
+def _cuda_elementwise(name, args, block, grid):
+	cuda_module = cupy.cuda.compile_with_cache(CUDA_SRU_KERNEL)
+	func = cuda_module.get_function(name)
+	func(args=args, block=block, grid=grid)
 
 def _np_sigmoid(x):
 	return 1 / (1 + np.exp(-x))
@@ -150,8 +155,6 @@ class SRUFunction(Function):
 		U = xp.matmul(W, X)
 		# print(U.shape)
 		# print(U)
-
-
 		# ct += xp.random.uniform(size=(batchsize, feature_dimension))
 		# ct = X[..., 0]
 		# print(ct.data.ptr)
@@ -164,17 +167,20 @@ class SRUFunction(Function):
 		H = xp.zeros((batchsize, feature_dimension, seq_length), dtype=X.dtype)
 		# print(X.shape)
 		# print(U.shape)
-		cuda_forward_func(args=[
-			X.data.ptr,
-			U.data.ptr,
-			b.data.ptr,
-			ct.data.ptr,
-			H.data.ptr,
-			batchsize,
-			feature_dimension,
-			seq_length,
-			self.use_tanh
-		], block=(thread_per_block, 1, 1), grid=(num_block, 1, 1))
+		_cuda_elementwise("forward", 
+			args=[
+				X.data.ptr,
+				U.data.ptr,
+				b.data.ptr,
+				ct.data.ptr,
+				H.data.ptr,
+				batchsize,
+				feature_dimension,
+				seq_length,
+				self.use_tanh
+			], 
+			block=(thread_per_block, 1, 1), 
+			grid=(num_block, 1, 1))
 		# import numpy
 		# numpy.set_printoptions(suppress=True)
 		# print(ct)

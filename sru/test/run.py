@@ -6,11 +6,10 @@ import torch
 from torch.autograd import Variable
 sys.path.append(os.path.join(".."))
 from naive_sru import SRU as NaiveSRU
+from sru import SRU
 
 def main():
-	gpu_device = 1
-	with xp.cuda.Device(gpu_device):
-		from sru import SRU
+	gpu_device = 0
 	seq_length = 5
 	batchsize = 3
 	feature_dimension = 3
@@ -29,7 +28,7 @@ def main():
 
 # @profile
 def profile():
-	gpu_device = 1
+	gpu_device = 0
 	seq_length = 50
 	batchsize = 48
 	feature_dimension = 128
