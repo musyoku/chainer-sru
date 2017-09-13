@@ -2,9 +2,9 @@ import cupy
 import numpy as np
 from chainer import link, initializers, variable, cuda, Function
 from chainer.utils import conv_nd, type_check
-from cupy.cuda import function, Stream
-from pynvrtc.compiler import Program
-from collections import namedtuple
+# from cupy.cuda import function
+# from pynvrtc.compiler import Program
+# from collections import namedtuple
 # from pynvrtc.interface import NVRTCInterface, NVRTCException
 
 CUDA_SRU_KERNEL = """
@@ -39,7 +39,7 @@ extern "C"
 		const float* wf_ptr = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 1) * feature_dimension * seq_length;
 		const float* z_ptr  = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 2) * feature_dimension * seq_length;
 
-		for(int t = 0;t < 1;t++)
+		for(int t = 0;t < seq_length;t++)
 		{
 			float zt = *(z_ptr);
 			float ft = sigmoidf((*(wf_ptr)) + bf);
@@ -122,11 +122,10 @@ class SRUFunction(Function):
 		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		U = np.matmul(W, X)
-		print(U)
 		R, F, Z = np.split(U, 3, axis=1)
 		H = None
 
-		for t in range(1):
+		for t in range(seq_length):
 			xt = X[..., t]
 			zt = Z[..., t]
 			ft = _np_sigmoid(F[..., t] + b[:feature_dimension])
