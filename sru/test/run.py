@@ -117,7 +117,7 @@ def autograd(X, W, b, ct, use_tanh=False):
 	return H, C
 
 def check_backward():
-	seq_length = 5
+	seq_length = 2
 	batchsize = 3
 	feature_dimension = 4
 	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
@@ -125,21 +125,21 @@ def check_backward():
 	x_cpu = chainer.Variable(x_cpu_data)
 	x_gpu = chainer.Variable(x_gpu_data)
 
-	layer = SRU(feature_dimension, feature_dimension)
+	layer = SRU(feature_dimension, feature_dimension, use_tanh=False)
 	layer.reset_state()
 	output_true, cell_true = autograd(x_cpu, layer.W, layer.b, layer.ct, layer.use_tanh)
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
-	layer.reset_state()
+	print(cell_true)
+	print(layer.b.grad)
+
 	layer.to_gpu(gpu_device)
+	layer.reset_state()
 	output, cell = layer(x_gpu_data)
 
 	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
-
-	print(cell_true)
-	# print(layer.b.grad)
 	
 	layer.cleargrads()
 	functions.sum(output).backward()

@@ -76,7 +76,7 @@ extern "C"
 				  const float* __restrict__ u_ptr, 
 				  const float* __restrict__ bias_ptr, 
 				  const float* __restrict__ prev_cell_ptr, 
-				  const float* __restrict__ grad_h_ptr,
+				  const float* __restrict__ grad_y_ptr,
 				  float* __restrict__ grad_x_ptr, 
 				  float* __restrict__ grad_w_ptr,
 				  float* __restrict__ grad_bias_ptr, 
@@ -105,16 +105,17 @@ extern "C"
 		const float* wft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
 		const float*  zt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
-		const float* grad_ht_ptr = grad_h_ptr + column * seq_length;	// gradient from the upper layer
-		float ct = *(prev_ct_ptr);	// initialize c_t
+		const float* grad_ht_ptr = grad_y_ptr + column * seq_length;	// gradient from the upper layer
+		float prev_ct = *(prev_ct_ptr);	// initialize c_t
 
 		// backward
-		float* grad_bf_ptr = grad_bias_ptr + feature_index;
-		float* grad_br_ptr = grad_bias_ptr + feature_index + feature_dimension;
+		float* grad_bft_ptr = grad_bias_ptr + (feature_index + (batch_index * 2)     * feature_dimension) * seq_length;
+		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
 		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
 
 		// init
-		*grad_br_ptr = 0;
+		*grad_bft_ptr = 0;
+		float prev_grad_bft = 0;
 
 		for(int t = 0;t < seq_length;t++)
 		{
@@ -123,28 +124,37 @@ extern "C"
 			const float ft = sigmoidf((*(wft_ptr)) + bf);
 			const float rt = sigmoidf((*(wrt_ptr)) + br);
 			const float xt = *xt_ptr;
-			const float grad = *grad_ht_ptr;				// gradient from the upper layer
+			const float grad_y = *grad_ht_ptr;				// gradient from the upper layer
 
-			ct = ft * (ct - zt) + zt;
-			float g_ct = use_tanh ? tanh(ct) : ct;
+			float next_ct = ft * (prev_ct - zt) + zt;
+			float g_ct = use_tanh ? tanh(next_ct) : next_ct;
 
 			// backward
-			*grad_br_ptr += (1.0f - rt) * rt * (g_ct - xt) * grad;
-			*grad_xt_ptr = grad;
+			*grad_brt_ptr = grad_y * (g_ct - xt) * (1.0f - rt) * rt;
+			const float grad_tanh = use_tanh ? (1.0f - g_ct * g_ct) : 1.0f;
+			*grad_bft_ptr = grad_y * rt * grad_tanh * (prev_ct - zt) * (1.0f - ft) * ft + grad_y * rt * ft * prev_grad_bft;
+			*grad_xt_ptr = zt;
+
+			prev_grad_bft = grad_y * rt * grad_tanh * (prev_ct - zt) * (1.0f - ft) * ft;
 
 			// move to the next time
-			xt_ptr += 1;
+			xt_ptr  += 1;
 			wrt_ptr += 1;
 			wft_ptr += 1;
-			zt_ptr += 1;
-			grad_ht_ptr += 1;
-			grad_xt_ptr += 1;
+			zt_ptr  += 1;
+			grad_ht_ptr  += 1;
+			grad_xt_ptr  += 1;
+			grad_brt_ptr += 1;
+			grad_bft_ptr += 1;
+
+			// update cell
+			prev_ct = next_ct;
 		}
 	}
 
 	__global__ 
 	void backward_test(
-				  float* __restrict__ grad_h_ptr,
+				  float* __restrict__ grad_y_ptr,
 				  float* __restrict__ grad_x_ptr, 
 				  const int batchsize, 
 				  const int feature_dimension, 
@@ -159,12 +169,12 @@ extern "C"
 		int feature_index = column % feature_dimension;				// 0 <= feature_index < feature_dimension
 
 		// backward
-		float* grad_ht_ptr = grad_h_ptr + column * seq_length;	// gradient from the upper layer
+		float* grad_ht_ptr = grad_y_ptr + column * seq_length;	// gradient from the upper layer
 		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
 
 		for(int t = 0;t < seq_length;t++)
 		{
-			const float grad = *grad_ht_ptr;				// gradient from the upper layer
+			const float grad_y = *grad_ht_ptr;				// gradient from the upper layer
 			*grad_xt_ptr = column + t;
 			*grad_ht_ptr = column + t;
 			grad_ht_ptr += 1;
@@ -338,7 +348,7 @@ class SRUFunction(Function):
 		U = xp.matmul(W, X)
 
 		grad_x = xp.zeros_like(X)
-		grad_b = xp.zeros_like(b)
+		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=b.dtype)
 		grad_w = xp.zeros_like(W)
 		grad_prev_ct = xp.zeros_like(ct)
 
@@ -393,8 +403,10 @@ class SRUFunction(Function):
 
 		# print("_cuda_elementwise")
 		np.set_printoptions(suppress=True)
-		# print(grad_h)
 		print(grad_x)
+		print(xp.sum(grad_b, axis=(0,)))
+		grad_b = xp.sum(grad_b, axis=(0, 2))
+		print(grad_b)
 
 
 
