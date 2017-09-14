@@ -10,13 +10,20 @@ extern "C"
 	__forceinline__ __device__ 
 	float sigmoidf(float x)
 	{
-		return 1.f / (1.f + expf(-x));
+		return 1.0f / (1.0f + expf(-x));
 	}
 
 	__global__ 
-	void forward(const float* __restrict__ x_ptr, const float* __restrict__ u_ptr, const float* __restrict__ bias_ptr, 
-				 const float* __restrict__ prev_cell_ptr, float* __restrict__ cell_ptr, float* __restrict__ hidden_state_ptr, 
-				 const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
+	void forward(const float* __restrict__ x_ptr, 
+				 const float* __restrict__ u_ptr, 
+				 const float* __restrict__ bias_ptr, 
+				 const float* __restrict__ prev_cell_ptr, 
+				 float* __restrict__ cell_ptr, 
+				 float* __restrict__ hidden_state_ptr, 
+				 const int batchsize, 
+				 const int feature_dimension, 
+				 const int seq_length, 
+				 const int use_tanh)
 	{
 		int column = blockIdx.x * blockDim.x + threadIdx.x;			// 0 <= column < batchsize * feature_dimension
 		int total_columns = batchsize * feature_dimension;
@@ -37,15 +44,15 @@ extern "C"
 		float ct = *(prev_ct_ptr);	// initialize c_t
 
 		// U = (W_r, W_f, W)
-		const float* wr_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
-		const float* wf_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
-		const float*  z_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
+		const float* wrt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		const float* wft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		const float*  zt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
 		for(int t = 0;t < seq_length;t++)
 		{
-			const float zt = *(z_ptr);					// x_tilde_t
-			const float ft = sigmoidf((*(wf_ptr)) + bf);
-			const float rt = sigmoidf((*(wr_ptr)) + br);
+			const float zt = *(zt_ptr);					// x_tilde_t
+			const float ft = sigmoidf((*(wft_ptr)) + bf);
+			const float rt = sigmoidf((*(wrt_ptr)) + br);
 			const float xt = *xt_ptr;
 
 			ct = ft * (ct - zt) + zt;
@@ -54,22 +61,30 @@ extern "C"
 			float g_ct = use_tanh ? tanh(ct) : ct;
 			*ht_ptr = rt * (g_ct - xt) + xt;
 
-			// Move to the next time
+			// move to the next time
 			ht_ptr += 1;
 			ct_ptr += 1;
 			xt_ptr += 1;
-			wr_ptr += 1;
-			wf_ptr += 1;
-			z_ptr  += 1;
+			wrt_ptr += 1;
+			wft_ptr += 1;
+			zt_ptr  += 1;
 		}
 	}
 
 	__global__ 
-	void backward(const float* __restrict__ x_ptr, const float* __restrict__ u_ptr, const float* __restrict__ bias_ptr, 
-				  const float* __restrict__ cell_ptr, 
-				  float* __restrict__ grad_x_ptr, float* __restrict__ grad_w_ptr,
-				  float* __restrict__ grad_bias_ptr, float* __restrict__ grad_prev_ct_ptr,
-				  const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
+	void backward(const float* __restrict__ x_ptr, 
+				  const float* __restrict__ u_ptr, 
+				  const float* __restrict__ bias_ptr, 
+				  const float* __restrict__ prev_cell_ptr, 
+				  const float* __restrict__ grad_h_ptr,
+				  float* __restrict__ grad_x_ptr, 
+				  float* __restrict__ grad_w_ptr,
+				  float* __restrict__ grad_bias_ptr, 
+				  float* __restrict__ grad_prev_ct_ptr,
+				  const int batchsize, 
+				  const int feature_dimension, 
+				  const int seq_length, 
+				  const int use_tanh)
 	{
 		int column = blockIdx.x * blockDim.x + threadIdx.x;			// 0 <= column < batchsize * feature_dimension
 		int total_columns = batchsize * feature_dimension;
@@ -82,27 +97,78 @@ extern "C"
 		const float bf = *(bias_ptr + feature_index);
 		const float br = *(bias_ptr + feature_index + feature_dimension);
 
-		const float* ct_ptr = cell_ptr + column * seq_length;				// c_t
+		const float* prev_ct_ptr = prev_cell_ptr + column;			// c_{t-1}
 		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
 
 		// U = (W_r, W_f, W)
-		const float* wr_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
-		const float* wf_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
-		const float*  z_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
+		const float* wrt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		const float* wft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		const float*  zt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
+
+		const float* grad_ht_ptr = grad_h_ptr + column * seq_length;	// gradient from the upper layer
+		float ct = *(prev_ct_ptr);	// initialize c_t
+
+		// backward
+		float* grad_bf_ptr = grad_bias_ptr + feature_index;
+		float* grad_br_ptr = grad_bias_ptr + feature_index + feature_dimension;
+		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
+
+		// init
+		*grad_br_ptr = 0;
 
 		for(int t = 0;t < seq_length;t++)
 		{
-			const float zt = *(z_ptr);					// x_tilde_t
-			const float ft = sigmoidf((*(wf_ptr)) + bf);
-			const float rt = sigmoidf((*(wr_ptr)) + br);
+			// forward
+			const float zt = *(zt_ptr);						// x_tilde_t
+			const float ft = sigmoidf((*(wft_ptr)) + bf);
+			const float rt = sigmoidf((*(wrt_ptr)) + br);
 			const float xt = *xt_ptr;
+			const float grad = *grad_ht_ptr;				// gradient from the upper layer
 
-			// Move to the next time
-			ct_ptr += 1;
+			ct = ft * (ct - zt) + zt;
+			float g_ct = use_tanh ? tanh(ct) : ct;
+
+			// backward
+			*grad_br_ptr += (1.0f - rt) * rt * (g_ct - xt) * grad;
+			*grad_xt_ptr = grad;
+
+			// move to the next time
 			xt_ptr += 1;
-			wr_ptr += 1;
-			wf_ptr += 1;
-			z_ptr  += 1;
+			wrt_ptr += 1;
+			wft_ptr += 1;
+			zt_ptr += 1;
+			grad_ht_ptr += 1;
+			grad_xt_ptr += 1;
+		}
+	}
+
+	__global__ 
+	void backward_test(
+				  float* __restrict__ grad_h_ptr,
+				  float* __restrict__ grad_x_ptr, 
+				  const int batchsize, 
+				  const int feature_dimension, 
+				  const int seq_length, 
+				  const int use_tanh)
+	{
+		int column = blockIdx.x * blockDim.x + threadIdx.x;			// 0 <= column < batchsize * feature_dimension
+		int total_columns = batchsize * feature_dimension;
+		if(column >= total_columns) return;
+
+		int batch_index = column / feature_dimension;				// 0 <= batch_index < batchsize
+		int feature_index = column % feature_dimension;				// 0 <= feature_index < feature_dimension
+
+		// backward
+		float* grad_ht_ptr = grad_h_ptr + column * seq_length;	// gradient from the upper layer
+		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
+
+		for(int t = 0;t < seq_length;t++)
+		{
+			const float grad = *grad_ht_ptr;				// gradient from the upper layer
+			*grad_xt_ptr = column + t;
+			*grad_ht_ptr = column + t;
+			grad_ht_ptr += 1;
+			grad_xt_ptr += 1;
 		}
 	}
 
@@ -249,6 +315,7 @@ class SRUFunction(Function):
 			], 
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
+
 		# import numpy
 		# numpy.set_printoptions(suppress=True)
 		# print(ct)
@@ -269,19 +336,24 @@ class SRUFunction(Function):
 		num_block = total_columns // thread_per_block + 1
 
 		U = xp.matmul(W, X)
-		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
-		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
-		grad_x = xp.empty_like(X)
-		grad_b = xp.empty_like(b)
-		grad_w = xp.empty_like(W)
-		grad_prev_ct = xp.empty_like(ct)
+
+		grad_x = xp.zeros_like(X)
+		grad_b = xp.zeros_like(b)
+		grad_w = xp.zeros_like(W)
+		grad_prev_ct = xp.zeros_like(ct)
+
+		grad_h = grad_outputs[0]
+		# print(grad_h.flags)
+		grad_h = cupy.ascontiguousarray(grad_h)
+		# print(grad_h.flags)
 
 		_cuda_elementwise("backward", 
 			args=[
 				X.data.ptr,
 				U.data.ptr,
 				b.data.ptr,
-				C.data.ptr,
+				ct.data.ptr,
+				grad_h.data.ptr,
 				grad_x.data.ptr,
 				grad_w.data.ptr,
 				grad_b.data.ptr,
@@ -293,6 +365,42 @@ class SRUFunction(Function):
 			], 
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
+		# cuda.cupy.ElementwiseKernel(
+		# 	'float32 x',
+		# 	'float32 h',
+		# 	'''
+		# 	h = i;
+		# 	''',
+		# 	'reduce_probability')(grad_x, grad_h)
+
+		# print("ElementwiseKernel")
+		# print(grad_h)
+		# print(grad_x)
+
+		# _cuda_elementwise("backward_test", 
+		# 	args=[
+		# 		grad_h.data.ptr,
+		# 		grad_x.data.ptr,
+		# 		batchsize,
+		# 		feature_dimension,
+		# 		seq_length,
+		# 		self.use_tanh
+		# 	], 
+		# 	block=(thread_per_block, 1, 1), 
+		# 	grid=(num_block, 1, 1))
+
+
+
+		# print("_cuda_elementwise")
+		np.set_printoptions(suppress=True)
+		# print(grad_h)
+		print(grad_x)
+
+
+
+
+
+
 		return None, None, None
 
 def sru(x, W, b, ct=None, use_tanh=True):

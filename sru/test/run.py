@@ -8,9 +8,10 @@ sys.path.append(os.path.join(".."))
 from naive_sru import SRU as NaiveSRU
 from sru import SRU
 
+gpu_device = 0
+
 # @profile
 def profile():
-	gpu_device = 1
 	seq_length = 50
 	batchsize = 48
 	feature_dimension = 128
@@ -65,7 +66,6 @@ def profile():
 
 
 def check_outputs():
-	gpu_device = 0
 	seq_length = 50
 	batchsize = 48
 	feature_dimension = 128
@@ -105,37 +105,31 @@ def autograd(X, W, b, ct, use_tanh=False):
 		rt = functions.sigmoid(R[..., t] + br)
 
 		ct = ft * ct + (1 - ft) * zt
-
-		if C is None:
-			C = functions.expand_dims(ct, 2)
-		else:
-			C = functions.concat((C, functions.expand_dims(ct, 2)), axis=2)
+		C = functions.expand_dims(ct, 2) if C is None else functions.concat((C, functions.expand_dims(ct, 2)), axis=2)
 
 		g_ct = ct
 		if use_tanh:
 			g_ct = functions.tanh(ct)
 
 		ht = rt * g_ct + (1 - rt) * xt
-
-		if H is None:
-			H = functions.expand_dims(ht, 2)
-		else:
-			H = functions.concat((H, functions.expand_dims(ht, 2)), axis=2)
+		H = functions.expand_dims(ht, 2) if H is None else functions.concat((H, functions.expand_dims(ht, 2)), axis=2)
 
 	return H, C
 
 def check_backward():
-	gpu_device = 0
-	seq_length = 50
-	batchsize = 48
-	feature_dimension = 128
+	seq_length = 5
+	batchsize = 3
+	feature_dimension = 4
 	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
 	x_cpu = chainer.Variable(x_cpu_data)
 	x_gpu = chainer.Variable(x_gpu_data)
 
 	layer = SRU(feature_dimension, feature_dimension)
-	output_true, cell_true = autograd(x_cpu, layer.W, layer.b, layer.ct)
+	layer.reset_state()
+	output_true, cell_true = autograd(x_cpu, layer.W, layer.b, layer.ct, layer.use_tanh)
+	layer.cleargrads()
+	functions.sum(output_true).backward()
 
 	layer.reset_state()
 	layer.to_gpu(gpu_device)
@@ -144,7 +138,12 @@ def check_backward():
 	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
 
-	output.backward()
+	print(cell_true)
+	# print(layer.b.grad)
+	
+	layer.cleargrads()
+	functions.sum(output).backward()
+
 
 if __name__ == "__main__":
 	check_backward()
