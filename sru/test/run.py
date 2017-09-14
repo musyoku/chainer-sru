@@ -1,9 +1,9 @@
-import sys, os
+import sys, os, chainer
 import cupy as xp
 import numpy as np
-from chainer import links, cuda
+from chainer import links, cuda, functions
 import torch
-from torch.autograd import Variable
+import torch.autograd
 sys.path.append(os.path.join(".."))
 from naive_sru import SRU as NaiveSRU
 from sru import SRU
@@ -50,7 +50,7 @@ def profile():
 		)
 		rnn.cuda()
 		for _ in range(100):
-			output, hidden = rnn(Variable(data_gpu_torch))
+			output, hidden = rnn(torch.autograd.Variable(data_gpu_torch))
 
 	# LSTM (Chainer)
 	layer = links.LSTM(feature_dimension, feature_dimension)
@@ -85,17 +85,65 @@ def check_outputs():
 	print(np.mean(abs(c_cpu.data - cuda.to_cpu(c_gpu.data))))
 	print(np.mean(abs(h_cpu.data - cuda.to_cpu(h_gpu.data))))
 
+
+def autograd(X, W, b, ct, use_tanh=False):
+	batchsize, feature_dimension, seq_length = X.shape
+	if ct is None:
+		ct = chainer.Variable(np.zeros((batchsize, feature_dimension), dtype=X.dtype))
+
+	U = functions.connection.convolution_2d.convolution_2d(X[:, :, None, :], W[..., None, None])[:, :, 0]
+	R, F, Z = functions.split_axis(U, 3, axis=1)
+	H = None
+	C = None
+	bf = functions.broadcast_to(b[:feature_dimension], (batchsize, feature_dimension))
+	br = functions.broadcast_to(b[feature_dimension:], (batchsize, feature_dimension))
+
+	for t in range(seq_length):
+		xt = X[..., t]
+		zt = Z[..., t]
+		ft = functions.sigmoid(F[..., t] + bf)
+		rt = functions.sigmoid(R[..., t] + br)
+
+		ct = ft * ct + (1 - ft) * zt
+
+		if C is None:
+			C = functions.expand_dims(ct, 2)
+		else:
+			C = functions.concat((C, functions.expand_dims(ct, 2)), axis=2)
+
+		g_ct = ct
+		if use_tanh:
+			g_ct = functions.tanh(ct)
+
+		ht = rt * g_ct + (1 - rt) * xt
+
+		if H is None:
+			H = functions.expand_dims(ht, 2)
+		else:
+			H = functions.concat((H, functions.expand_dims(ht, 2)), axis=2)
+
+	return H, C
+
 def check_backward():
 	gpu_device = 0
 	seq_length = 50
 	batchsize = 48
 	feature_dimension = 128
-	data_cpu = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
-	data_gpu = cuda.to_gpu(data_cpu, gpu_device)
+	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
+	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
+	x_cpu = chainer.Variable(x_cpu_data)
+	x_gpu = chainer.Variable(x_gpu_data)
 
 	layer = SRU(feature_dimension, feature_dimension)
+	output_true, cell_true = autograd(x_cpu, layer.W, layer.b, layer.ct)
+
+	layer.reset_state()
 	layer.to_gpu(gpu_device)
-	output, cell = layer(data_gpu)
+	output, cell = layer(x_gpu_data)
+
+	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
+	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
+
 	output.backward()
 
 if __name__ == "__main__":

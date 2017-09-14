@@ -295,11 +295,11 @@ class SRUFunction(Function):
 			grid=(num_block, 1, 1))
 		return None, None, None
 
-def sru(x, U, b, ct=None, use_tanh=True):
+def sru(x, W, b, ct=None, use_tanh=True):
 	func = SRUFunction(use_tanh)
 	if ct is None:
-		return func(x, U, b)
-	return func(x, U, b, ct)
+		return func(x, W, b)
+	return func(x, W, b, ct)
 
 class SRU(link.Link):
 	def __init__(self, in_channels, out_channels, use_tanh=True, initialW=None):
@@ -310,11 +310,11 @@ class SRU(link.Link):
 		self.ct = None
 
 		with self.init_scope():
-			self.U = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels))
+			self.W = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels))
 			self.b = variable.Parameter(initializers._get_initializer(0), out_channels * 2)
 
 	def __call__(self, x):
-		return sru(x, self.U, self.b, self.ct, self.use_tanh)
+		return sru(x, self.W, self.b, self.ct, self.use_tanh)
 
 	def reset_state(self):
 		self.ct = None
