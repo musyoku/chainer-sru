@@ -15,90 +15,97 @@ extern "C"
 
 	__global__ 
 	void forward(const float* __restrict__ x_ptr, const float* __restrict__ u_ptr, const float* __restrict__ bias_ptr, 
-			float* __restrict__ context_ptr, float* __restrict__ hidden_state_ptr, 
-			const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
+				 const float* __restrict__ prev_cell_ptr, float* __restrict__ cell_ptr, float* __restrict__ hidden_state_ptr, 
+				 const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
 	{
-		int column = blockIdx.x * blockDim.x + threadIdx.x;
+		int column = blockIdx.x * blockDim.x + threadIdx.x;			// 0 <= column < batchsize * feature_dimension
 		int total_columns = batchsize * feature_dimension;
 		if(column >= total_columns) return;
-		int batch_index = column / feature_dimension;
 
-		const float bf = *(bias_ptr + column % feature_dimension);
-		const float br = *(bias_ptr + column % feature_dimension + feature_dimension);
+		int batch_index = column / feature_dimension;				// 0 <= batch_index < batchsize
+		int feature_index = column % feature_dimension;				// 0 <= feature_index < feature_dimension
 
-		float* ct_ptr = context_ptr + column;
-		float* ht_ptr = hidden_state_ptr + column * seq_length;
-		const float* xt_ptr = x_ptr + column * seq_length;
+		// B = (b_f, b_r)
+		const float bf = *(bias_ptr + feature_index);
+		const float br = *(bias_ptr + feature_index + feature_dimension);
 
-		float ct = *(ct_ptr);
+		const float* prev_ct_ptr = prev_cell_ptr + column;			// c_{t-1}
+		float* ct_ptr = cell_ptr + column * seq_length;				// c_t
+		float* ht_ptr = hidden_state_ptr + column * seq_length;		// h_t
+		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
 
-		const float* wr_ptr = u_ptr + column % feature_dimension * seq_length + batch_index * 3 * feature_dimension * seq_length;
-		const float* wf_ptr = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 1) * feature_dimension * seq_length;
-		const float* z_ptr  = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 2) * feature_dimension * seq_length;
+		float ct = *(prev_ct_ptr);	// initialize c_t
+
+		// U = (W_r, W_f, W)
+		const float* wr_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		const float* wf_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		const float*  z_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
 		for(int t = 0;t < seq_length;t++)
 		{
-			float zt = *(z_ptr);					// x_tilde
-			float ft = sigmoidf((*(wf_ptr)) + bf);
-			float rt = sigmoidf((*(wr_ptr)) + br);
-			float xt = *xt_ptr;
+			const float zt = *(z_ptr);					// x_tilde_t
+			const float ft = sigmoidf((*(wf_ptr)) + bf);
+			const float rt = sigmoidf((*(wr_ptr)) + br);
+			const float xt = *xt_ptr;
 
 			ct = ft * (ct - zt) + zt;
 			*ct_ptr = ct;
 			
-			ct = use_tanh ? tanh(ct) : ct;
-			*ht_ptr = rt * (ct - xt) + xt;
+			float g_ct = use_tanh ? tanh(ct) : ct;
+			*ht_ptr = rt * (g_ct - xt) + xt;
 
+			// Move to the next time
 			ht_ptr += 1;
+			ct_ptr += 1;
 			xt_ptr += 1;
 			wr_ptr += 1;
 			wf_ptr += 1;
-			z_ptr += 1;
+			z_ptr  += 1;
 		}
 	}
 
 	__global__ 
 	void backward(const float* __restrict__ x_ptr, const float* __restrict__ u_ptr, const float* __restrict__ bias_ptr, 
-			float* __restrict__ context_ptr, float* __restrict__ hidden_state_ptr, 
-			const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
+				  const float* __restrict__ cell_ptr, 
+				  float* __restrict__ grad_x_ptr, float* __restrict__ grad_w_ptr,
+				  float* __restrict__ grad_bias_ptr, float* __restrict__ grad_prev_ct_ptr,
+				  const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
 	{
-		int column = blockIdx.x * blockDim.x + threadIdx.x;
+		int column = blockIdx.x * blockDim.x + threadIdx.x;			// 0 <= column < batchsize * feature_dimension
 		int total_columns = batchsize * feature_dimension;
 		if(column >= total_columns) return;
-		int batch_index = column / feature_dimension;
 
-		const float bf = *(bias_ptr + column % feature_dimension);
-		const float br = *(bias_ptr + column % feature_dimension + feature_dimension);
+		int batch_index = column / feature_dimension;				// 0 <= batch_index < batchsize
+		int feature_index = column % feature_dimension;				// 0 <= feature_index < feature_dimension
 
-		float* ct_ptr = context_ptr + column;
-		float* ht_ptr = hidden_state_ptr + column * seq_length;
-		const float* xt_ptr = x_ptr + column * seq_length;
+		// B = (b_f, b_r)
+		const float bf = *(bias_ptr + feature_index);
+		const float br = *(bias_ptr + feature_index + feature_dimension);
 
-		float ct = *(ct_ptr);
+		const float* ct_ptr = cell_ptr + column * seq_length;				// c_t
+		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
 
-		const float* wr_ptr = u_ptr + column % feature_dimension * seq_length + batch_index * 3 * feature_dimension * seq_length;
-		const float* wf_ptr = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 1) * feature_dimension * seq_length;
-		const float* z_ptr  = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 2) * feature_dimension * seq_length;
+		// U = (W_r, W_f, W)
+		const float* wr_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		const float* wf_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		const float*  z_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
 		for(int t = 0;t < seq_length;t++)
 		{
-			float zt = *(z_ptr);
-			float ft = sigmoidf((*(wf_ptr)) + bf);
-			float rt = sigmoidf((*(wr_ptr)) + br);
-			float xt = *xt_ptr;
+			const float zt = *(z_ptr);					// x_tilde_t
+			const float ft = sigmoidf((*(wf_ptr)) + bf);
+			const float rt = sigmoidf((*(wr_ptr)) + br);
+			const float xt = *xt_ptr;
 
-			ct = ft * (ct - zt) + zt;
-			ct = use_tanh ? tanh(ct) : ct;
-			*ct_ptr = ct;
-			*ht_ptr = rt * (ct - xt) + xt;
-
-			ht_ptr += 1;
+			// Move to the next time
+			ct_ptr += 1;
 			xt_ptr += 1;
 			wr_ptr += 1;
 			wf_ptr += 1;
-			z_ptr += 1;
+			z_ptr  += 1;
 		}
 	}
+
 }
 """
 
@@ -177,6 +184,7 @@ class SRUFunction(Function):
 		U = np.matmul(W, X)
 		R, F, Z = np.split(U, 3, axis=1)
 		H = None
+		C = None
 
 		for t in range(seq_length):
 			xt = X[..., t]
@@ -185,6 +193,11 @@ class SRUFunction(Function):
 			rt = _np_sigmoid(R[..., t] + b[feature_dimension:])
 
 			ct = ft * ct + (1 - ft) * zt
+
+			if C is None:
+				C = np.expand_dims(ct, 2)
+			else:
+				C = np.concatenate((C, np.expand_dims(ct, 2)), axis=2)
 
 			g_ct = ct
 			if self.use_tanh:
@@ -197,7 +210,7 @@ class SRUFunction(Function):
 			else:
 				H = np.concatenate((H, np.expand_dims(ht, 2)), axis=2)
 
-		return H,
+		return H, C
 
 	def forward_gpu(self, inputs):
 		X, W, b = inputs[:3]
@@ -217,7 +230,8 @@ class SRUFunction(Function):
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
 
-		H = xp.zeros((batchsize, feature_dimension, seq_length), dtype=X.dtype)
+		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
+		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
 		# print(X.shape)
 		# print(U.shape)
 		_cuda_elementwise("forward", 
@@ -226,6 +240,7 @@ class SRUFunction(Function):
 				U.data.ptr,
 				b.data.ptr,
 				ct.data.ptr,
+				C.data.ptr,
 				H.data.ptr,
 				batchsize,
 				feature_dimension,
@@ -238,13 +253,47 @@ class SRUFunction(Function):
 		# numpy.set_printoptions(suppress=True)
 		# print(ct)
 		# print(cuda.to_cpu(H).astype(numpy.float32))
-		return H,
+		return H, C
 
 	def backward_cpu(self, inputs, grad_outputs):
 		raise NotImplementedError()
 
 	def backward_gpu(self, inputs, grad_outputs):
-		raise NotImplementedError()
+		X, W, b = inputs[:3]
+		xp = cuda.get_array_module(W)
+		batchsize, feature_dimension, seq_length = X.shape
+		ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
+
+		total_columns = feature_dimension * batchsize
+		thread_per_block = min(512, total_columns)
+		num_block = total_columns // thread_per_block + 1
+
+		U = xp.matmul(W, X)
+		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
+		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
+		grad_x = xp.empty_like(X)
+		grad_b = xp.empty_like(b)
+		grad_w = xp.empty_like(W)
+		grad_prev_ct = xp.empty_like(ct)
+
+		_cuda_elementwise("backward", 
+			args=[
+				X.data.ptr,
+				U.data.ptr,
+				b.data.ptr,
+				C.data.ptr,
+				grad_x.data.ptr,
+				grad_w.data.ptr,
+				grad_b.data.ptr,
+				grad_prev_ct.data.ptr,
+				batchsize,
+				feature_dimension,
+				seq_length,
+				self.use_tanh
+			], 
+			block=(thread_per_block, 1, 1), 
+			grid=(num_block, 1, 1))
+		return None, None, None
 
 def sru(x, U, b, ct=None, use_tanh=True):
 	func = SRUFunction(use_tanh)

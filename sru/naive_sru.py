@@ -29,10 +29,13 @@ class SRU(link.Chain):
 			ft = functions.sigmoid(self.bf(F[..., t]))
 			rt = functions.sigmoid(self.br(F[..., t]))
 
-			if self.ct is None:
-				self.ct = zt
+			self.ct = 0 if self.C is None else self.ct
+			self.ct = ft * self.ct + (1 - ft) * zt
+
+			if self.C is None:
+				self.C = functions.expand_dims(self.ct, 2)
 			else:
-				self.ct = ft * self.ct + (1 - ft) * zt
+				self.C = functions.concat((self.C, functions.expand_dims(self.ct, 2)), axis=2)
 
 			g_ct = self.ct
 			if self.use_tanh:
@@ -47,7 +50,7 @@ class SRU(link.Chain):
 			else:
 				self.H = functions.concat((self.H, functions.expand_dims(self.ht, 2)), axis=2)
 
-		return self.H
+		return self.H, self.C
 
 	def reset_state(self):
 		self.set_state(None, None, None)
@@ -55,6 +58,7 @@ class SRU(link.Chain):
 	def set_state(self, ct, ht, H):
 		self.ct = ct	# last cell state
 		self.ht = ht	# last hidden state
+		self.C = C		# all cell states
 		self.H = H		# all hidden states
 
 	def get_last_hidden_state(self):

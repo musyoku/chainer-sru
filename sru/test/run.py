@@ -20,21 +20,21 @@ def profile():
 	# CPU
 	layer = SRU(feature_dimension, feature_dimension)
 	for _ in range(100):
-		h_cpu = layer(data_cpu)
+		h_cpu, c_cpu = layer(data_cpu)
 		layer.reset_state()
 
 	# GPU (define-by-run)
 	layer = NaiveSRU(feature_dimension, feature_dimension)
 	layer.to_gpu(gpu_device)
 	for _ in range(100):
-		h = layer(data_gpu)
+		h, c = layer(data_gpu)
 		layer.reset_state()
 
 	# GPU (CUDA Kernel)
 	layer = SRU(feature_dimension, feature_dimension)
 	layer.to_gpu(gpu_device)
 	for _ in range(100):
-		h_gpu = layer(data_gpu)
+		h_gpu, c_gpu = layer(data_gpu)
 		layer.reset_state()
 
 	# GPU (PyTorch)
@@ -74,15 +74,29 @@ def check_outputs():
 
 	# CPU
 	layer = SRU(feature_dimension, feature_dimension)
-	h_cpu = layer(data_cpu)
+	h_cpu, c_cpu = layer(data_cpu)
 	layer.reset_state()
 
 	# GPU
 	layer.to_gpu(gpu_device)
-	h_gpu = layer(data_gpu)
+	h_gpu, c_gpu = layer(data_gpu)
 	layer.reset_state()
 
+	print(np.mean(abs(c_cpu.data - cuda.to_cpu(c_gpu.data))))
 	print(np.mean(abs(h_cpu.data - cuda.to_cpu(h_gpu.data))))
 
+def check_backward():
+	gpu_device = 0
+	seq_length = 50
+	batchsize = 48
+	feature_dimension = 128
+	data_cpu = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
+	data_gpu = cuda.to_gpu(data_cpu, gpu_device)
+
+	layer = SRU(feature_dimension, feature_dimension)
+	layer.to_gpu(gpu_device)
+	output, cell = layer(data_gpu)
+	output.backward()
+
 if __name__ == "__main__":
-	check_outputs()
+	check_backward()
