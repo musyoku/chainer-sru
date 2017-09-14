@@ -34,10 +34,11 @@ class SRU(link.Chain):
 			else:
 				self.ct = ft * self.ct + (1 - ft) * zt
 
+			g_ct = self.ct
 			if self.use_tanh:
-				self.ct = functions.tanh(self.ct)
+				g_ct = functions.tanh(self.ct)
 
-			self.ht = rt * self.ct
+			self.ht = rt * g_ct
 			if self.use_highway_connections:
 				self.ht += (1 - rt) * xt
 

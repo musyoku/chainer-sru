@@ -15,8 +15,52 @@ extern "C"
 
 	__global__ 
 	void forward(const float* __restrict__ x_ptr, const float* __restrict__ u_ptr, const float* __restrict__ bias_ptr, 
-		float* __restrict__ context_ptr, float* __restrict__ hidden_state_ptr, 
-		const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
+			float* __restrict__ context_ptr, float* __restrict__ hidden_state_ptr, 
+			const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
+	{
+		int column = blockIdx.x * blockDim.x + threadIdx.x;
+		int total_columns = batchsize * feature_dimension;
+		if(column >= total_columns) return;
+		int batch_index = column / feature_dimension;
+
+		const float bf = *(bias_ptr + column % feature_dimension);
+		const float br = *(bias_ptr + column % feature_dimension + feature_dimension);
+
+		float* ct_ptr = context_ptr + column;
+		float* ht_ptr = hidden_state_ptr + column * seq_length;
+		const float* xt_ptr = x_ptr + column * seq_length;
+
+		float ct = *(ct_ptr);
+
+		const float* wr_ptr = u_ptr + column % feature_dimension * seq_length + batch_index * 3 * feature_dimension * seq_length;
+		const float* wf_ptr = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 1) * feature_dimension * seq_length;
+		const float* z_ptr  = u_ptr + column % feature_dimension * seq_length + (batch_index * 3 + 2) * feature_dimension * seq_length;
+
+		for(int t = 0;t < seq_length;t++)
+		{
+			float zt = *(z_ptr);					// x_tilde
+			float ft = sigmoidf((*(wf_ptr)) + bf);
+			float rt = sigmoidf((*(wr_ptr)) + br);
+			float xt = *xt_ptr;
+
+			ct = ft * (ct - zt) + zt;
+			*ct_ptr = ct;
+			
+			ct = use_tanh ? tanh(ct) : ct;
+			*ht_ptr = rt * (ct - xt) + xt;
+
+			ht_ptr += 1;
+			xt_ptr += 1;
+			wr_ptr += 1;
+			wf_ptr += 1;
+			z_ptr += 1;
+		}
+	}
+
+	__global__ 
+	void backward(const float* __restrict__ x_ptr, const float* __restrict__ u_ptr, const float* __restrict__ bias_ptr, 
+			float* __restrict__ context_ptr, float* __restrict__ hidden_state_ptr, 
+			const int batchsize, const int feature_dimension, const int seq_length, const int use_tanh)
 	{
 		int column = blockIdx.x * blockDim.x + threadIdx.x;
 		int total_columns = batchsize * feature_dimension;
@@ -142,10 +186,11 @@ class SRUFunction(Function):
 
 			ct = ft * ct + (1 - ft) * zt
 
+			g_ct = ct
 			if self.use_tanh:
-				ct = np.tanh(ct)
+				g_ct = np.tanh(ct)
 
-			ht = rt * ct + (1 - rt) * xt
+			ht = rt * g_ct + (1 - rt) * xt
 
 			if H is None:
 				H = np.expand_dims(ht, 2)
