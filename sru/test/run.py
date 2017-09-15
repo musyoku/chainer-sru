@@ -8,7 +8,7 @@ sys.path.append(os.path.join(".."))
 from naive_sru import SRU as NaiveSRU
 from sru import SRU
 
-gpu_device = 0
+gpu_device = 1
 
 # @profile
 def profile():
@@ -131,6 +131,7 @@ def check_backward():
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
+	print("cell_true")
 	print(cell_true)
 	print(layer.b.grad)
 

@@ -17,7 +17,7 @@ extern "C"
 	void forward(const float* __restrict__ x_ptr, 
 				 const float* __restrict__ u_ptr, 
 				 const float* __restrict__ bias_ptr, 
-				 const float* __restrict__ prev_cell_ptr, 
+				 const float* __restrict__ cell_init_ptr, 
 				 float* __restrict__ cell_ptr, 
 				 float* __restrict__ hidden_state_ptr, 
 				 const int batchsize, 
@@ -36,12 +36,12 @@ extern "C"
 		const float bf = *(bias_ptr + feature_index);
 		const float br = *(bias_ptr + feature_index + feature_dimension);
 
-		const float* prev_ct_ptr = prev_cell_ptr + column;			// c_{t-1}
+		const float* ct_init_ptr = cell_init_ptr + column;			// initial cell state
 		float* ct_ptr = cell_ptr + column * seq_length;				// c_t
 		float* ht_ptr = hidden_state_ptr + column * seq_length;		// h_t
 		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
 
-		float ct = *(prev_ct_ptr);	// initialize c_t
+		float ct = *(ct_init_ptr);	// initialize c_t
 
 		// U = (W_r, W_f, W)
 		const float* wrt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
@@ -75,7 +75,8 @@ extern "C"
 	void backward(const float* __restrict__ x_ptr, 
 				  const float* __restrict__ u_ptr, 
 				  const float* __restrict__ bias_ptr, 
-				  const float* __restrict__ prev_cell_ptr, 
+				  const float* __restrict__ cell_ptr, 
+				  const float* __restrict__ cell_init_ptr, 
 				  const float* __restrict__ grad_y_ptr,
 				  float* __restrict__ grad_x_ptr, 
 				  float* __restrict__ grad_w_ptr,
@@ -97,17 +98,17 @@ extern "C"
 		const float bf = *(bias_ptr + feature_index);
 		const float br = *(bias_ptr + feature_index + feature_dimension);
 
-		const float* prev_ct_ptr = prev_cell_ptr + column;			// c_{t-1}
+		const float* ct_init_ptr = cell_init_ptr + column;			// initial cell state
 		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
+		const float* ct_ptr = cell_ptr + column * seq_length;	// c_t
 
 		// U = (W_r, W_f, W)
 		const float* wrt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
 		const float* wft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
 		const float*  zt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
-		const float* grad_ht_ptr = grad_y_ptr + column * seq_length;	// gradient from the upper layer
-		float prev_ct = *(prev_ct_ptr);	// initialize c_t
-
+		const float* grad_yt_ptr = grad_y_ptr + column * seq_length;	// gradient from the upper layer
+		const float initial_cell = *(ct_init_ptr);	// initialize c_t
 		// backward
 		float* grad_bft_ptr = grad_bias_ptr + (feature_index + (batch_index * 2)     * feature_dimension) * seq_length;
 		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
@@ -115,73 +116,61 @@ extern "C"
 
 		// init
 		*grad_bft_ptr = 0;
+		*grad_brt_ptr = 0;
 		float prev_grad_bft = 0;
 
-		for(int t = 0;t < seq_length;t++)
+		// move to time T
+		xt_ptr  += seq_length - 1;
+		wrt_ptr += seq_length - 1;
+		wft_ptr += seq_length - 1;
+		zt_ptr  += seq_length - 1;
+		ct_ptr  += seq_length - 1;
+		grad_yt_ptr  += seq_length - 1;
+		grad_xt_ptr  += seq_length - 1;
+		grad_brt_ptr += seq_length - 1;
+		grad_bft_ptr += seq_length - 1;
+
+		float grad_over_time = 0;	// gradient propagating from time t to t-1
+
+		for(int t = seq_length - 1;t >= 0;t--)
 		{
 			// forward
 			const float zt = *(zt_ptr);						// x_tilde_t
 			const float ft = sigmoidf((*(wft_ptr)) + bf);
 			const float rt = sigmoidf((*(wrt_ptr)) + br);
 			const float xt = *xt_ptr;
-			const float grad_y = *grad_ht_ptr;				// gradient from the upper layer
+			const float grad_y = *grad_yt_ptr;				// gradient from the upper layer
+			const float ct = *(ct_ptr);						// c_t
+			const float prev_ct = t == 0 ? initial_cell : *(ct_ptr - 1);	// c_{t-1}
 
-			float next_ct = ft * (prev_ct - zt) + zt;
-			float g_ct = use_tanh ? tanh(next_ct) : next_ct;
+			float g_ct = use_tanh ? tanh(ct) : ct;
 
 			// backward
+			//// b_r
 			*grad_brt_ptr = grad_y * (g_ct - xt) * (1.0f - rt) * rt;
+
+			//// b_f
 			const float grad_tanh = use_tanh ? (1.0f - g_ct * g_ct) : 1.0f;
-			*grad_bft_ptr = grad_y * rt * grad_tanh * (prev_ct - zt) * (1.0f - ft) * ft + grad_y * rt * ft * prev_grad_bft;
-			*grad_xt_ptr = zt;
+			const float grad_ct = grad_y * rt * grad_tanh;
+			*grad_bft_ptr = (grad_ct + grad_over_time) * (prev_ct - zt) * (1 - ft) * ft;
+
+			grad_over_time = (grad_ct + grad_over_time) * ft;
+			*grad_xt_ptr = prev_ct;
 
 			prev_grad_bft = grad_y * rt * grad_tanh * (prev_ct - zt) * (1.0f - ft) * ft;
 
-			// move to the next time
-			xt_ptr  += 1;
-			wrt_ptr += 1;
-			wft_ptr += 1;
-			zt_ptr  += 1;
-			grad_ht_ptr  += 1;
-			grad_xt_ptr  += 1;
-			grad_brt_ptr += 1;
-			grad_bft_ptr += 1;
-
-			// update cell
-			prev_ct = next_ct;
+			// move to the prev time
+			xt_ptr  -= 1;
+			wrt_ptr -= 1;
+			wft_ptr -= 1;
+			zt_ptr  -= 1;
+			ct_ptr  -= 1;
+			grad_yt_ptr  -= 1;
+			grad_xt_ptr  -= 1;
+			grad_brt_ptr -= 1;
+			grad_bft_ptr -= 1;
 		}
 	}
-
-	__global__ 
-	void backward_test(
-				  float* __restrict__ grad_y_ptr,
-				  float* __restrict__ grad_x_ptr, 
-				  const int batchsize, 
-				  const int feature_dimension, 
-				  const int seq_length, 
-				  const int use_tanh)
-	{
-		int column = blockIdx.x * blockDim.x + threadIdx.x;			// 0 <= column < batchsize * feature_dimension
-		int total_columns = batchsize * feature_dimension;
-		if(column >= total_columns) return;
-
-		int batch_index = column / feature_dimension;				// 0 <= batch_index < batchsize
-		int feature_index = column % feature_dimension;				// 0 <= feature_index < feature_dimension
-
-		// backward
-		float* grad_ht_ptr = grad_y_ptr + column * seq_length;	// gradient from the upper layer
-		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
-
-		for(int t = 0;t < seq_length;t++)
-		{
-			const float grad_y = *grad_ht_ptr;				// gradient from the upper layer
-			*grad_xt_ptr = column + t;
-			*grad_ht_ptr = column + t;
-			grad_ht_ptr += 1;
-			grad_xt_ptr += 1;
-		}
-	}
-
 }
 """
 
@@ -330,6 +319,7 @@ class SRUFunction(Function):
 		# numpy.set_printoptions(suppress=True)
 		# print(ct)
 		# print(cuda.to_cpu(H).astype(numpy.float32))
+		self.C = C
 		return H, C
 
 	def backward_cpu(self, inputs, grad_outputs):
@@ -362,6 +352,7 @@ class SRUFunction(Function):
 				X.data.ptr,
 				U.data.ptr,
 				b.data.ptr,
+				self.C.data.ptr,
 				ct.data.ptr,
 				grad_h.data.ptr,
 				grad_x.data.ptr,
@@ -403,9 +394,10 @@ class SRUFunction(Function):
 
 		# print("_cuda_elementwise")
 		np.set_printoptions(suppress=True)
+		print("grad_x")
 		print(grad_x)
-		print(xp.sum(grad_b, axis=(0,)))
 		grad_b = xp.sum(grad_b, axis=(0, 2))
+		print("grad_b")
 		print(grad_b)
 
 
