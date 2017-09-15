@@ -81,7 +81,7 @@ extern "C"
 				  float* __restrict__ grad_x_ptr, 
 				  float* __restrict__ grad_w_ptr,
 				  float* __restrict__ grad_bias_ptr, 
-				  float* __restrict__ grad_prev_ct_ptr,
+				  float* __restrict__ grad_init_ct_ptr,
 				  const int batchsize, 
 				  const int feature_dimension, 
 				  const int seq_length, 
@@ -109,6 +109,7 @@ extern "C"
 
 		const float* grad_yt_ptr = grad_y_ptr + column * seq_length;	// gradient from the upper layer
 		const float initial_cell = *(ct_init_ptr);	// initialize c_t
+
 		// backward
 		float* grad_bft_ptr = grad_bias_ptr + (feature_index + (batch_index * 2)     * feature_dimension) * seq_length;
 		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
@@ -154,6 +155,8 @@ extern "C"
 			const float grad_ct = grad_y * rt * grad_tanh;
 			*grad_bft_ptr = (grad_ct + grad_over_time) * (prev_ct - zt) * (1 - ft) * ft;
 
+			/// w_r
+
 			grad_over_time = (grad_ct + grad_over_time) * ft;
 			*grad_xt_ptr = prev_ct;
 
@@ -170,6 +173,7 @@ extern "C"
 			grad_brt_ptr -= 1;
 			grad_bft_ptr -= 1;
 		}
+		*(grad_init_ct_ptr + column) = grad_over_time;
 	}
 }
 """
@@ -275,21 +279,21 @@ class SRUFunction(Function):
 			else:
 				H = np.concatenate((H, np.expand_dims(ht, 2)), axis=2)
 
-		return H, C
+		return H, C, C[..., -1]
 
 	def forward_gpu(self, inputs):
 		X, W, b = inputs[:3]
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
-		ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
+		initial_ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		U = xp.matmul(W, X)
 		# print(U.shape)
 		# print(U)
-		# ct += xp.random.uniform(size=(batchsize, feature_dimension))
-		# ct = X[..., 0]
-		# print(ct.data.ptr)
-		# print(ct)
+		# initial_ct += xp.random.uniform(size=(batchsize, feature_dimension))
+		# initial_ct = X[..., 0]
+		# print(initial_ct.data.ptr)
+		# print(initial_ct)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
@@ -304,7 +308,7 @@ class SRUFunction(Function):
 				X.data.ptr,
 				U.data.ptr,
 				b.data.ptr,
-				ct.data.ptr,
+				initial_ct.data.ptr,
 				C.data.ptr,
 				H.data.ptr,
 				batchsize,
@@ -317,10 +321,10 @@ class SRUFunction(Function):
 
 		# import numpy
 		# numpy.set_printoptions(suppress=True)
-		# print(ct)
+		# print(initial_ct)
 		# print(cuda.to_cpu(H).astype(numpy.float32))
 		self.C = C
-		return H, C
+		return H, C, C[..., -1]
 
 	def backward_cpu(self, inputs, grad_outputs):
 		raise NotImplementedError()
@@ -329,7 +333,7 @@ class SRUFunction(Function):
 		X, W, b = inputs[:3]
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
-		ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
+		initial_ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
@@ -340,11 +344,12 @@ class SRUFunction(Function):
 		grad_x = xp.zeros_like(X)
 		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=b.dtype)
 		grad_w = xp.zeros_like(W)
-		grad_prev_ct = xp.zeros_like(ct)
+		grad_initial_ct = xp.zeros_like(initial_ct)
 
 		grad_h = grad_outputs[0]
+		if grad_h.flags.c_contiguous is False:
+			grad_h = cupy.ascontiguousarray(grad_h)
 		# print(grad_h.flags)
-		grad_h = cupy.ascontiguousarray(grad_h)
 		# print(grad_h.flags)
 
 		_cuda_elementwise("backward", 
@@ -353,12 +358,12 @@ class SRUFunction(Function):
 				U.data.ptr,
 				b.data.ptr,
 				self.C.data.ptr,
-				ct.data.ptr,
+				initial_ct.data.ptr,
 				grad_h.data.ptr,
 				grad_x.data.ptr,
 				grad_w.data.ptr,
 				grad_b.data.ptr,
-				grad_prev_ct.data.ptr,
+				grad_initial_ct.data.ptr,
 				batchsize,
 				feature_dimension,
 				seq_length,
@@ -399,19 +404,16 @@ class SRUFunction(Function):
 		grad_b = xp.sum(grad_b, axis=(0, 2))
 		print("grad_b")
 		print(grad_b)
-
-
-
-
-
+		print("grad_initial_ct")
+		print(grad_initial_ct)
 
 		return None, None, None
 
-def sru(x, W, b, ct=None, use_tanh=True):
+def sru(x, W, b, initial_ct=None, use_tanh=True):
 	func = SRUFunction(use_tanh)
-	if ct is None:
+	if initial_ct is None:
 		return func(x, W, b)
-	return func(x, W, b, ct)
+	return func(x, W, b, initial_ct)
 
 class SRU(link.Link):
 	def __init__(self, in_channels, out_channels, use_tanh=True, initialW=None):
@@ -419,14 +421,10 @@ class SRU(link.Link):
 		self.in_channels = in_channels
 		self.out_channels = out_channels
 		self.use_tanh = use_tanh
-		self.ct = None
 
 		with self.init_scope():
 			self.W = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels))
 			self.b = variable.Parameter(initializers._get_initializer(0), out_channels * 2)
 
-	def __call__(self, x):
-		return sru(x, self.W, self.b, self.ct, self.use_tanh)
-
-	def reset_state(self):
-		self.ct = None
+	def __call__(self, x, initial_ct):
+		return sru(x, self.W, self.b, initial_ct, self.use_tanh)

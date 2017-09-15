@@ -8,7 +8,7 @@ sys.path.append(os.path.join(".."))
 from naive_sru import SRU as NaiveSRU
 from sru import SRU
 
-gpu_device = 1
+gpu_device = 0
 
 # @profile
 def profile():
@@ -86,10 +86,10 @@ def check_outputs():
 	print(np.mean(abs(h_cpu.data - cuda.to_cpu(h_gpu.data))))
 
 
-def autograd(X, W, b, ct, use_tanh=False):
+def autograd(X, W, b, initial_ct=None, use_tanh=False):
 	batchsize, feature_dimension, seq_length = X.shape
-	if ct is None:
-		ct = chainer.Variable(np.zeros((batchsize, feature_dimension), dtype=X.dtype))
+	if initial_ct is None:
+		initial_ct = chainer.Variable(np.zeros((batchsize, feature_dimension), dtype=X.dtype))
 
 	U = functions.connection.convolution_2d.convolution_2d(X[:, :, None, :], W[..., None, None])[:, :, 0]
 	R, F, Z = functions.split_axis(U, 3, axis=1)
@@ -97,6 +97,8 @@ def autograd(X, W, b, ct, use_tanh=False):
 	C = None
 	bf = functions.broadcast_to(b[:feature_dimension], (batchsize, feature_dimension))
 	br = functions.broadcast_to(b[feature_dimension:], (batchsize, feature_dimension))
+
+	ct = initial_ct
 
 	for t in range(seq_length):
 		xt = X[..., t]
@@ -114,7 +116,7 @@ def autograd(X, W, b, ct, use_tanh=False):
 		ht = rt * g_ct + (1 - rt) * xt
 		H = functions.expand_dims(ht, 2) if H is None else functions.concat((H, functions.expand_dims(ht, 2)), axis=2)
 
-	return H, C
+	return H, C, C[..., -1]
 
 def check_backward():
 	seq_length = 2
@@ -126,8 +128,7 @@ def check_backward():
 	x_gpu = chainer.Variable(x_gpu_data)
 
 	layer = SRU(feature_dimension, feature_dimension, use_tanh=False)
-	layer.reset_state()
-	output_true, cell_true = autograd(x_cpu, layer.W, layer.b, layer.ct, layer.use_tanh)
+	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.b, None, layer.use_tanh)
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
@@ -136,8 +137,7 @@ def check_backward():
 	print(layer.b.grad)
 
 	layer.to_gpu(gpu_device)
-	layer.reset_state()
-	output, cell = layer(x_gpu_data)
+	output, cell, last_cell = layer(x_gpu_data, None)
 
 	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
