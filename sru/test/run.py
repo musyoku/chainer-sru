@@ -129,6 +129,7 @@ def check_backward():
 
 	layer = SRU(feature_dimension, feature_dimension, use_tanh=False)
 	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.b, None, layer.use_tanh)
+	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.b, last_cell_true, layer.use_tanh)
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
@@ -138,12 +139,15 @@ def check_backward():
 
 	layer.to_gpu(gpu_device)
 	output, cell, last_cell = layer(x_gpu_data, None)
+	output, cell, last_cell = layer(x_gpu_data, last_cell)
 
 	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
 	
 	layer.cleargrads()
 	functions.sum(output).backward()
+	print("layer.b.grad")
+	print(layer.b.grad)
 
 
 if __name__ == "__main__":

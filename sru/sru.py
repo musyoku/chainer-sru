@@ -241,7 +241,7 @@ class SRUFunction(Function):
 			type_check.expect(
 				ct_type.dtype == x_type.dtype,
 				ct_type.ndim == 2,
-				ct_type.shape[0] == b_type.shape[0],
+				ct_type.shape[1] == x_type.shape[1],
 			)
 
 	# x: (batchsize, seq_length, feature_dimension)
@@ -331,6 +331,7 @@ class SRUFunction(Function):
 
 	def backward_gpu(self, inputs, grad_outputs):
 		X, W, b = inputs[:3]
+		print(len(inputs))
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 		initial_ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
@@ -344,11 +345,17 @@ class SRUFunction(Function):
 		grad_x = xp.zeros_like(X)
 		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=b.dtype)
 		grad_w = xp.zeros_like(W)
-		grad_initial_ct = xp.zeros_like(initial_ct)
+
+		grad_initial_ct = grad_outputs[2]
+		if grad_initial_ct is None:
+			grad_initial_ct = xp.zeros_like(initial_ct)
 
 		grad_h = grad_outputs[0]
-		if grad_h.flags.c_contiguous is False:
-			grad_h = cupy.ascontiguousarray(grad_h)
+		if grad_h is None:
+			grad_h = xp.zeros_like(initial_ct)
+		else:
+			if grad_h.flags.c_contiguous is False:
+				grad_h = cupy.ascontiguousarray(grad_h)
 		# print(grad_h.flags)
 		# print(grad_h.flags)
 
@@ -407,7 +414,9 @@ class SRUFunction(Function):
 		print("grad_initial_ct")
 		print(grad_initial_ct)
 
-		return None, None, None
+		if len(inputs) == 4:
+			return grad_x, grad_w, grad_b, grad_initial_ct
+		return grad_x, grad_w, grad_b
 
 def sru(x, W, b, initial_ct=None, use_tanh=True):
 	func = SRUFunction(use_tanh)
