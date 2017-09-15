@@ -135,6 +135,7 @@ def check_backward():
 
 	print("cell_true")
 	print(cell_true)
+	print("layer.b.grad")
 	print(layer.b.grad)
 
 	layer.to_gpu(gpu_device)

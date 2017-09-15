@@ -17,7 +17,7 @@ extern "C"
 	void forward(const float* __restrict__ x_ptr, 
 				 const float* __restrict__ u_ptr, 
 				 const float* __restrict__ bias_ptr, 
-				 const float* __restrict__ cell_init_ptr, 
+				 const float* __restrict__ initial_cell_ptr, 
 				 float* __restrict__ cell_ptr, 
 				 float* __restrict__ hidden_state_ptr, 
 				 const int batchsize, 
@@ -36,12 +36,12 @@ extern "C"
 		const float bf = *(bias_ptr + feature_index);
 		const float br = *(bias_ptr + feature_index + feature_dimension);
 
-		const float* ct_init_ptr = cell_init_ptr + column;			// initial cell state
+		const float* initial_ct_ptr = initial_cell_ptr + column;			// initial cell state
 		float* ct_ptr = cell_ptr + column * seq_length;				// c_t
 		float* ht_ptr = hidden_state_ptr + column * seq_length;		// h_t
 		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
 
-		float ct = *(ct_init_ptr);	// initialize c_t
+		float ct = *(initial_ct_ptr);	// initialize c_t
 
 		// U = (W_r, W_f, W)
 		const float* wrt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
@@ -76,8 +76,9 @@ extern "C"
 				  const float* __restrict__ u_ptr, 
 				  const float* __restrict__ bias_ptr, 
 				  const float* __restrict__ cell_ptr, 
-				  const float* __restrict__ cell_init_ptr, 
-				  const float* __restrict__ grad_y_ptr,
+				  const float* __restrict__ initial_cell_ptr, 
+				  const float* __restrict__ incoming_grad_h_ptr,
+				  const float* __restrict__ incoming_grad_ct_ptr,
 				  float* __restrict__ grad_x_ptr, 
 				  float* __restrict__ grad_w_ptr,
 				  float* __restrict__ grad_bias_ptr, 
@@ -98,7 +99,7 @@ extern "C"
 		const float bf = *(bias_ptr + feature_index);
 		const float br = *(bias_ptr + feature_index + feature_dimension);
 
-		const float* ct_init_ptr = cell_init_ptr + column;			// initial cell state
+		const float* initial_ct_ptr = initial_cell_ptr + column;			// initial cell state
 		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
 		const float* ct_ptr = cell_ptr + column * seq_length;	// c_t
 
@@ -107,18 +108,13 @@ extern "C"
 		const float* wft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
 		const float*  zt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
-		const float* grad_yt_ptr = grad_y_ptr + column * seq_length;	// gradient from the upper layer
-		const float initial_cell = *(ct_init_ptr);	// initialize c_t
+		const float* incoming_grad_ht_ptr = incoming_grad_h_ptr + column * seq_length;	// gradient from the upper layer
+		const float initial_cell = *(initial_ct_ptr);	// initialize c_t
 
 		// backward
 		float* grad_bft_ptr = grad_bias_ptr + (feature_index + (batch_index * 2)     * feature_dimension) * seq_length;
 		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
 		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
-
-		// init
-		*grad_bft_ptr = 0;
-		*grad_brt_ptr = 0;
-		float prev_grad_bft = 0;
 
 		// move to time T
 		xt_ptr  += seq_length - 1;
@@ -126,12 +122,12 @@ extern "C"
 		wft_ptr += seq_length - 1;
 		zt_ptr  += seq_length - 1;
 		ct_ptr  += seq_length - 1;
-		grad_yt_ptr  += seq_length - 1;
+		incoming_grad_ht_ptr  += seq_length - 1;
 		grad_xt_ptr  += seq_length - 1;
 		grad_brt_ptr += seq_length - 1;
 		grad_bft_ptr += seq_length - 1;
 
-		float grad_over_time = 0;	// gradient propagating from time t to t-1
+		float incoming_grad_ct = *(incoming_grad_ct_ptr + column);	// gradient propagating from time t to t-1
 
 		for(int t = seq_length - 1;t >= 0;t--)
 		{
@@ -140,7 +136,7 @@ extern "C"
 			const float ft = sigmoidf((*(wft_ptr)) + bf);
 			const float rt = sigmoidf((*(wrt_ptr)) + br);
 			const float xt = *xt_ptr;
-			const float grad_y = *grad_yt_ptr;				// gradient from the upper layer
+			const float incoming_grad_ht = *incoming_grad_ht_ptr;	// gradient from the upper layer
 			const float ct = *(ct_ptr);						// c_t
 			const float prev_ct = t == 0 ? initial_cell : *(ct_ptr - 1);	// c_{t-1}
 
@@ -148,19 +144,17 @@ extern "C"
 
 			// backward
 			//// b_r
-			*grad_brt_ptr = grad_y * (g_ct - xt) * (1.0f - rt) * rt;
+			*grad_brt_ptr = incoming_grad_ht * (g_ct - xt) * (1.0f - rt) * rt;
 
 			//// b_f
 			const float grad_tanh = use_tanh ? (1.0f - g_ct * g_ct) : 1.0f;
-			const float grad_ct = grad_y * rt * grad_tanh;
-			*grad_bft_ptr = (grad_ct + grad_over_time) * (prev_ct - zt) * (1 - ft) * ft;
+			const float grad_ct = incoming_grad_ht * rt * grad_tanh;
+			*grad_bft_ptr = (grad_ct + incoming_grad_ct) * (prev_ct - zt) * (1 - ft) * ft;
 
 			/// w_r
 
-			grad_over_time = (grad_ct + grad_over_time) * ft;
-			*grad_xt_ptr = prev_ct;
-
-			prev_grad_bft = grad_y * rt * grad_tanh * (prev_ct - zt) * (1.0f - ft) * ft;
+			incoming_grad_ct = (grad_ct + incoming_grad_ct) * ft;
+			*grad_xt_ptr = ft;
 
 			// move to the prev time
 			xt_ptr  -= 1;
@@ -168,12 +162,12 @@ extern "C"
 			wft_ptr -= 1;
 			zt_ptr  -= 1;
 			ct_ptr  -= 1;
-			grad_yt_ptr  -= 1;
+			incoming_grad_ht_ptr  -= 1;
 			grad_xt_ptr  -= 1;
 			grad_brt_ptr -= 1;
 			grad_bft_ptr -= 1;
 		}
-		*(grad_init_ct_ptr + column) = grad_over_time;
+		*(grad_init_ct_ptr + column) = incoming_grad_ct;
 	}
 }
 """
@@ -324,6 +318,7 @@ class SRUFunction(Function):
 		# print(initial_ct)
 		# print(cuda.to_cpu(H).astype(numpy.float32))
 		self.C = C
+		self.H = H
 		return H, C, C[..., -1]
 
 	def backward_cpu(self, inputs, grad_outputs):
@@ -345,19 +340,36 @@ class SRUFunction(Function):
 		grad_x = xp.zeros_like(X)
 		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=b.dtype)
 		grad_w = xp.zeros_like(W)
+		grad_initial_ct = xp.zeros_like(initial_ct)
 
-		grad_initial_ct = grad_outputs[2]
-		if grad_initial_ct is None:
-			grad_initial_ct = xp.zeros_like(initial_ct)
-
-		grad_h = grad_outputs[0]
-		if grad_h is None:
-			grad_h = xp.zeros_like(initial_ct)
+		incoming_grad_ct = grad_outputs[2]
+		if incoming_grad_ct is None:
+			incoming_grad_ct = xp.zeros_like(initial_ct)
 		else:
-			if grad_h.flags.c_contiguous is False:
-				grad_h = cupy.ascontiguousarray(grad_h)
-		# print(grad_h.flags)
-		# print(grad_h.flags)
+			if incoming_grad_ct.flags.c_contiguous is False:
+				incoming_grad_ct = cupy.ascontiguousarray(incoming_grad_ct)
+
+		incoming_grad_h = grad_outputs[0]
+		if incoming_grad_h is None:
+			incoming_grad_h = xp.zeros_like(self.H)
+		else:
+			if incoming_grad_h.flags.c_contiguous is False:
+				incoming_grad_h = cupy.ascontiguousarray(incoming_grad_h)
+		# print(incoming_grad_h.flags)
+		# print(incoming_grad_h.flags)
+
+
+		# print(X.flags)
+		# print(U.flags)
+		# print(b.flags)
+		# print(self.C.flags)
+		# print(initial_ct.flags)
+		# print(incoming_grad_h.flags)
+		# print(incoming_grad_ct.flags)
+		# print(grad_x.flags)
+		# print(grad_w.flags)
+		# print(grad_b.flags)
+		# print(grad_initial_ct.flags)
 
 		_cuda_elementwise("backward", 
 			args=[
@@ -366,7 +378,8 @@ class SRUFunction(Function):
 				b.data.ptr,
 				self.C.data.ptr,
 				initial_ct.data.ptr,
-				grad_h.data.ptr,
+				incoming_grad_h.data.ptr,
+				incoming_grad_ct.data.ptr,
 				grad_x.data.ptr,
 				grad_w.data.ptr,
 				grad_b.data.ptr,
@@ -413,6 +426,8 @@ class SRUFunction(Function):
 		print(grad_b)
 		print("grad_initial_ct")
 		print(grad_initial_ct)
+		print("incoming_grad_ct")
+		print(incoming_grad_ct)
 
 		if len(inputs) == 4:
 			return grad_x, grad_w, grad_b, grad_initial_ct
