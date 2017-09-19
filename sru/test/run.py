@@ -128,25 +128,31 @@ def check_backward():
 	x_gpu = chainer.Variable(x_gpu_data)
 
 	layer = SRU(feature_dimension, feature_dimension, use_tanh=False)
-	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.b, None, layer.use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.b, last_cell_true, layer.use_tanh)
+	output_true, cell_true, _last_cell_true = autograd(x_cpu, layer.W, layer.b, None, layer.use_tanh)
+	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.b, _last_cell_true, layer.use_tanh)
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
-	print("cell_true")
-	print(cell_true)
+	print("_last_cell_true")
+	print(_last_cell_true)
+	print("last_cell_true")
+	print(last_cell_true)
 	print("layer.b.grad")
 	print(layer.b.grad)
 
 	layer.to_gpu(gpu_device)
-	output, cell, last_cell = layer(x_gpu_data, None)
-	output, cell, last_cell = layer(x_gpu_data, last_cell)
+	output, cell, _last_cell = layer(x_gpu_data, None)
+	output, cell, last_cell = layer(x_gpu_data, _last_cell)
 
 	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
 	
 	layer.cleargrads()
 	functions.sum(output).backward()
+	print("_last_cell")
+	print(_last_cell)
+	print("last_cell")
+	print(last_cell)
 	print("layer.b.grad")
 	print(layer.b.grad)
 

@@ -280,6 +280,9 @@ class SRUFunction(Function):
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 		initial_ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
+		
+		if initial_ct.flags.c_contiguous is False:
+			initial_ct = cupy.ascontiguousarray(initial_ct)
 
 		U = xp.matmul(W, X)
 		# print(U.shape)
