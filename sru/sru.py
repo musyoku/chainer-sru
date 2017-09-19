@@ -424,6 +424,14 @@ class SRUFunction(Function):
 
 		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
+		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
+		print(grad_w.shape)
+		print(X.shape)
+		print(W.shape)
+		grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
+		print(grad_w)
+
+
 
 		# print("_cuda_elementwise")
 		np.set_printoptions(suppress=True)

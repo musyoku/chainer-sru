@@ -163,6 +163,7 @@ def check_backward():
 	functions.sum(output_true).backward()
 
 	b_grad = layer.B.grad.copy()
+	w_grad = layer.W.grad.copy()
 
 	print("last_cell_true")
 	print(last_cell_true)
@@ -188,6 +189,11 @@ def check_backward():
 	print(b_grad)
 	print("b_grad")
 	print(layer.B.grad)
+
+	print("w_grad")
+	print(w_grad)
+	print("w_grad")
+	print(layer.W.grad)
 
 	print("x_grad")
 	print(x_cpu.grad)
