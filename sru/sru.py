@@ -43,16 +43,16 @@ extern "C"
 
 		float ct = *(initial_ct_ptr);	// initialize c_t
 
-		// U = (W_r, W_f, W)
-		const float* wrt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
-		const float* wft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
-		const float*  zt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
+		// U = (W_r, W_f, W_z) @ X
+		const float* uzt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		const float* uft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		const float* urt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
 		for(int t = 0;t < seq_length;t++)
 		{
-			const float zt = *(zt_ptr);					// x_tilde_t
-			const float ft = sigmoidf((*(wft_ptr)) + bf);
-			const float rt = sigmoidf((*(wrt_ptr)) + br);
+			const float zt = *(uzt_ptr);					// x_tilde_t
+			const float ft = sigmoidf((*(uft_ptr)) + bf);
+			const float rt = sigmoidf((*(urt_ptr)) + br);
 			const float xt = *xt_ptr;
 
 			ct = ft * (ct - zt) + zt;
@@ -65,9 +65,9 @@ extern "C"
 			ht_ptr += 1;
 			ct_ptr += 1;
 			xt_ptr += 1;
-			wrt_ptr += 1;
-			wft_ptr += 1;
-			zt_ptr  += 1;
+			uzt_ptr  += 1;
+			uft_ptr += 1;
+			urt_ptr += 1;
 		}
 	}
 
@@ -79,7 +79,8 @@ extern "C"
 				  const float* __restrict__ initial_cell_ptr, 
 				  const float* __restrict__ incoming_grad_h_ptr,
 				  const float* __restrict__ incoming_grad_ct_ptr,
-				  float* __restrict__ grad_x_ptr, 
+				  float* __restrict__ grad_highway_x_ptr, 
+				  float* __restrict__ grad_uz_ptr, 
 				  float* __restrict__ grad_w_ptr,
 				  float* __restrict__ grad_bias_ptr, 
 				  float* __restrict__ grad_init_ct_ptr,
@@ -103,38 +104,40 @@ extern "C"
 		const float* xt_ptr = x_ptr + column * seq_length;			// x_t
 		const float* ct_ptr = cell_ptr + column * seq_length;	// c_t
 
-		// U = (W_r, W_f, W)
-		const float* wrt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
-		const float* wft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
-		const float*  zt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
+		// U = (W_r, W_f, W_z) @ X
+		const float* uzt_ptr = u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		const float* uft_ptr = u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		const float* urt_ptr = u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
 		const float* incoming_grad_ht_ptr = incoming_grad_h_ptr + column * seq_length;	// gradient from the upper layer
 		const float initial_cell = *(initial_ct_ptr);	// initialize c_t
 
-		// backward
+		// gradient
 		float* grad_bft_ptr = grad_bias_ptr + (feature_index + (batch_index * 2)     * feature_dimension) * seq_length;
 		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
-		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
+		float* grad_highway_xt_ptr = grad_highway_x_ptr + column * seq_length;
+		float* grad_uzt_ptr = grad_uz_ptr + column * seq_length;
 
 		// move to time T
 		xt_ptr  += seq_length - 1;
-		wrt_ptr += seq_length - 1;
-		wft_ptr += seq_length - 1;
-		zt_ptr  += seq_length - 1;
+		urt_ptr += seq_length - 1;
+		uft_ptr += seq_length - 1;
+		uzt_ptr  += seq_length - 1;
 		ct_ptr  += seq_length - 1;
-		incoming_grad_ht_ptr  += seq_length - 1;
-		grad_xt_ptr  += seq_length - 1;
+		grad_highway_xt_ptr += seq_length - 1;
 		grad_brt_ptr += seq_length - 1;
 		grad_bft_ptr += seq_length - 1;
+		grad_uzt_ptr += seq_length - 1;
+		incoming_grad_ht_ptr += seq_length - 1;
 
 		float incoming_grad_ct = *(incoming_grad_ct_ptr + column);	// gradient propagating from time t to t-1
 
 		for(int t = seq_length - 1;t >= 0;t--)
 		{
 			// forward
-			const float zt = *(zt_ptr);						// x_tilde_t
-			const float ft = sigmoidf((*(wft_ptr)) + bf);
-			const float rt = sigmoidf((*(wrt_ptr)) + br);
+			const float zt = *(uzt_ptr);						// x_tilde_t
+			const float ft = sigmoidf((*(uft_ptr)) + bf);
+			const float rt = sigmoidf((*(urt_ptr)) + br);
 			const float xt = *xt_ptr;
 			const float incoming_grad_ht = *incoming_grad_ht_ptr;	// gradient from the upper layer
 			const float ct = *(ct_ptr);						// c_t
@@ -151,19 +154,24 @@ extern "C"
 			const float grad_ct = incoming_grad_ht * rt * grad_tanh;
 			*grad_bft_ptr = (grad_ct + incoming_grad_ct) * (prev_ct - zt) * (1 - ft) * ft;
 
-			/// w_r
+			//// x_t (highway connection)
+			*grad_highway_xt_ptr = incoming_grad_ht * (1.0f - rt);
 
+			//// z_t (:= Wx_t)
+			*grad_uzt_ptr = incoming_grad_ht * (1.0f - ft);
+
+			//// c_{t-1}
 			incoming_grad_ct = (grad_ct + incoming_grad_ct) * ft;
-			*grad_xt_ptr = ft;
 
 			// move to the prev time
 			xt_ptr  -= 1;
-			wrt_ptr -= 1;
-			wft_ptr -= 1;
-			zt_ptr  -= 1;
+			urt_ptr -= 1;
+			uft_ptr -= 1;
+			uzt_ptr -= 1;
 			ct_ptr  -= 1;
 			incoming_grad_ht_ptr  -= 1;
-			grad_xt_ptr  -= 1;
+			grad_highway_xt_ptr  -= 1;
+			grad_uzt_ptr  -= 1;
 			grad_brt_ptr -= 1;
 			grad_bft_ptr -= 1;
 		}
@@ -250,7 +258,7 @@ class SRUFunction(Function):
 		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		U = np.matmul(W, X)
-		R, F, Z = np.split(U, 3, axis=1)
+		Z, F, R = np.split(U, 3, axis=1)
 		H = None
 		C = None
 
@@ -332,10 +340,9 @@ class SRUFunction(Function):
 
 	def backward_gpu(self, inputs, grad_outputs):
 		X, W, B = inputs[:3]
-		print(len(inputs))
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
-		initial_ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
+		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
@@ -343,7 +350,8 @@ class SRUFunction(Function):
 
 		U = xp.matmul(W, X)
 
-		grad_x = xp.zeros_like(X)
+		grad_highway_x = xp.zeros_like(X)
+		grad_uz = xp.zeros_like(X)
 		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
 		grad_w = xp.zeros_like(W)
 		grad_initial_ct = xp.zeros_like(initial_ct)
@@ -361,7 +369,7 @@ class SRUFunction(Function):
 		# print(initial_ct.flags)
 		# print(incoming_grad_h.flags)
 		# print(incoming_grad_ct.flags)
-		# print(grad_x.flags)
+		# print(grad_highway_x.flags)
 		# print(grad_w.flags)
 		# print(grad_b.flags)
 		# print(grad_initial_ct.flags)
@@ -375,7 +383,8 @@ class SRUFunction(Function):
 				initial_ct.data.ptr,
 				incoming_grad_h.data.ptr,
 				incoming_grad_ct.data.ptr,
-				grad_x.data.ptr,
+				grad_highway_x.data.ptr,
+				grad_uz.data.ptr,
 				grad_w.data.ptr,
 				grad_b.data.ptr,
 				grad_initial_ct.data.ptr,
@@ -410,12 +419,18 @@ class SRUFunction(Function):
 		# 	block=(thread_per_block, 1, 1), 
 		# 	grid=(num_block, 1, 1))
 
+		grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
+		# grad_u = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
+
+		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
 
 		# print("_cuda_elementwise")
 		np.set_printoptions(suppress=True)
 		print("grad_x")
 		print(grad_x)
+		print("grad_highway_x")
+		print(grad_highway_x)
 		grad_b = xp.sum(grad_b, axis=(0, 2))
 		print("grad_b")
 		print(grad_b)

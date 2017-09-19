@@ -92,7 +92,7 @@ def autograd(X, W, b, initial_ct=None, use_tanh=False):
 		initial_ct = chainer.Variable(np.zeros((batchsize, feature_dimension), dtype=X.dtype))
 
 	U = functions.connection.convolution_2d.convolution_2d(X[:, :, None, :], W[..., None, None])[:, :, 0]
-	R, F, Z = functions.split_axis(U, 3, axis=1)
+	Z, F, R = functions.split_axis(U, 3, axis=1)
 	H = None
 	C = None
 	bf = functions.broadcast_to(b[:feature_dimension], (batchsize, feature_dimension))
@@ -128,7 +128,22 @@ def check_matmul():
 	print(W)
 	U = np.matmul(W, X)
 	print(U)
-	
+
+def check_matmul_grad():
+	seq_length = 2
+	batchsize = 3
+	feature_dimension = 4
+	X = chainer.Variable(np.arange(0, batchsize * feature_dimension * seq_length).astype(np.float32).reshape((batchsize, feature_dimension, seq_length)))
+	W = chainer.Variable(np.arange(0, feature_dimension ** 2 * 3).astype(np.float32).reshape((feature_dimension * 3, feature_dimension)))
+
+	U = functions.connection.convolution_2d.convolution_2d(X[:, :, None, :], W[..., None, None])[:, :, 0]
+	_U = np.matmul(W.data, X.data)
+	loss = functions.sum(U)
+	loss.backward()
+	print(W.data)
+	print(X.grad)
+	print(xp.sum(W.data, axis=0))
+
 def check_backward():
 	seq_length = 2
 	batchsize = 3
@@ -138,34 +153,46 @@ def check_backward():
 	x_cpu = chainer.Variable(x_cpu_data)
 	x_gpu = chainer.Variable(x_gpu_data)
 
+
 	layer = SRU(feature_dimension, feature_dimension, use_tanh=False)
-	output_true, cell_true, _last_cell_true = autograd(x_cpu, layer.W, layer.B, None, layer.use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.B, _last_cell_true, layer.use_tanh)
+	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.B, None, layer.use_tanh)
+	print("last_cell_true")
+	print(last_cell_true)
+	# output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.B, last_cell_true, layer.use_tanh)
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
-	print("_last_cell_true")
-	print(_last_cell_true)
+	b_grad = layer.B.grad.copy()
+
 	print("last_cell_true")
 	print(last_cell_true)
-	print("layer.B.grad")
-	print(layer.B.grad)
 
 	layer.to_gpu(gpu_device)
-	output, cell, _last_cell = layer(x_gpu_data, None)
-	output, cell, last_cell = layer(x_gpu_data, _last_cell)
+	output, cell, last_cell = layer(x_gpu, None)
+	print("last_cell")
+	print(last_cell)
+	# output, cell, last_cell = layer(x_gpu, last_cell)
 
 	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
 	
 	layer.cleargrads()
 	functions.sum(output).backward()
-	print("_last_cell")
-	print(_last_cell)
 	print("last_cell")
 	print(last_cell)
-	print("layer.B.grad")
+
+	print("layer.W.data")
+	print(layer.W.data)
+
+	print("b_grad")
+	print(b_grad)
+	print("b_grad")
 	print(layer.B.grad)
+
+	print("x_grad")
+	print(x_cpu.grad)
+	print("x_grad")
+	print(x_gpu.grad)
 
 
 if __name__ == "__main__":
