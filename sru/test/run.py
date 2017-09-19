@@ -158,7 +158,7 @@ def check_backward():
 	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.B, None, layer.use_tanh)
 	print("last_cell_true")
 	print(last_cell_true)
-	# output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.B, last_cell_true, layer.use_tanh)
+	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.B, last_cell_true, layer.use_tanh)
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
@@ -171,7 +171,7 @@ def check_backward():
 	output, cell, last_cell = layer(x_gpu, None)
 	print("last_cell")
 	print(last_cell)
-	# output, cell, last_cell = layer(x_gpu, last_cell)
+	output, cell, last_cell = layer(x_gpu, last_cell)
 
 	print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 	print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))

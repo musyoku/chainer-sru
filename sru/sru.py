@@ -158,7 +158,7 @@ extern "C"
 			*grad_highway_xt_ptr = incoming_grad_ht * (1.0f - rt);
 
 			//// z_t (:= Wx_t)
-			*grad_uzt_ptr = incoming_grad_ht * (1.0f - ft);
+			*grad_uzt_ptr = (incoming_grad_ht * rt * grad_tanh + incoming_grad_ct) * (1.0f - ft);
 
 			//// c_{t-1}
 			incoming_grad_ct = (grad_ct + incoming_grad_ct) * ft;
