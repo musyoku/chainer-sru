@@ -208,6 +208,11 @@ def _cuda_elementwise(name, args, block, grid):
 def _np_sigmoid(x):
 	return 1 / (1 + np.exp(-x))
 
+def _as_contiguous(array):
+	if array.flags.c_contiguous is False:
+		array = cupy.ascontiguousarray(array)
+	return array
+
 class SRUFunction(Function):
 
 	def __init__(self, use_tanh):
@@ -240,7 +245,7 @@ class SRUFunction(Function):
 
 	# x: (batchsize, seq_length, feature_dimension)
 	def forward_cpu(self, inputs):
-		X, W, b = inputs[:3]
+		X, W, B = inputs[:3]
 		batchsize, feature_dimension, seq_length = X.shape
 		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
@@ -252,8 +257,8 @@ class SRUFunction(Function):
 		for t in range(seq_length):
 			xt = X[..., t]
 			zt = Z[..., t]
-			ft = _np_sigmoid(F[..., t] + b[:feature_dimension])
-			rt = _np_sigmoid(R[..., t] + b[feature_dimension:])
+			ft = _np_sigmoid(F[..., t] + B[:feature_dimension])
+			rt = _np_sigmoid(R[..., t] + B[feature_dimension:])
 
 			ct = ft * ct + (1 - ft) * zt
 
@@ -276,13 +281,11 @@ class SRUFunction(Function):
 		return H, C, C[..., -1]
 
 	def forward_gpu(self, inputs):
-		X, W, b = inputs[:3]
+		X, W, B = inputs[:3]
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
-		initial_ct = inputs[3] if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
-		
-		if initial_ct.flags.c_contiguous is False:
-			initial_ct = cupy.ascontiguousarray(initial_ct)
+
+		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		U = xp.matmul(W, X)
 		# print(U.shape)
@@ -304,7 +307,7 @@ class SRUFunction(Function):
 			args=[
 				X.data.ptr,
 				U.data.ptr,
-				b.data.ptr,
+				B.data.ptr,
 				initial_ct.data.ptr,
 				C.data.ptr,
 				H.data.ptr,
@@ -328,7 +331,7 @@ class SRUFunction(Function):
 		raise NotImplementedError()
 
 	def backward_gpu(self, inputs, grad_outputs):
-		X, W, b = inputs[:3]
+		X, W, B = inputs[:3]
 		print(len(inputs))
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
@@ -341,30 +344,19 @@ class SRUFunction(Function):
 		U = xp.matmul(W, X)
 
 		grad_x = xp.zeros_like(X)
-		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=b.dtype)
+		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
 		grad_w = xp.zeros_like(W)
 		grad_initial_ct = xp.zeros_like(initial_ct)
 
-		incoming_grad_ct = grad_outputs[2]
-		if incoming_grad_ct is None:
-			incoming_grad_ct = xp.zeros_like(initial_ct)
-		else:
-			if incoming_grad_ct.flags.c_contiguous is False:
-				incoming_grad_ct = cupy.ascontiguousarray(incoming_grad_ct)
-
-		incoming_grad_h = grad_outputs[0]
-		if incoming_grad_h is None:
-			incoming_grad_h = xp.zeros_like(self.H)
-		else:
-			if incoming_grad_h.flags.c_contiguous is False:
-				incoming_grad_h = cupy.ascontiguousarray(incoming_grad_h)
+		incoming_grad_ct = xp.zeros_like(initial_ct) if grad_outputs[2] is None else _as_contiguous(grad_outputs[2])
+		incoming_grad_h = xp.zeros_like(self.H) if grad_outputs[0] is None else _as_contiguous(grad_outputs[0])
 		# print(incoming_grad_h.flags)
 		# print(incoming_grad_h.flags)
 
 
 		# print(X.flags)
 		# print(U.flags)
-		# print(b.flags)
+		# print(B.flags)
 		# print(self.C.flags)
 		# print(initial_ct.flags)
 		# print(incoming_grad_h.flags)
@@ -378,7 +370,7 @@ class SRUFunction(Function):
 			args=[
 				X.data.ptr,
 				U.data.ptr,
-				b.data.ptr,
+				B.data.ptr,
 				self.C.data.ptr,
 				initial_ct.data.ptr,
 				incoming_grad_h.data.ptr,
@@ -436,11 +428,11 @@ class SRUFunction(Function):
 			return grad_x, grad_w, grad_b, grad_initial_ct
 		return grad_x, grad_w, grad_b
 
-def sru(x, W, b, initial_ct=None, use_tanh=True):
+def sru(x, W, B, initial_ct=None, use_tanh=True):
 	func = SRUFunction(use_tanh)
 	if initial_ct is None:
-		return func(x, W, b)
-	return func(x, W, b, initial_ct)
+		return func(x, W, B)
+	return func(x, W, B, initial_ct)
 
 class SRU(link.Link):
 	def __init__(self, in_channels, out_channels, use_tanh=True, initialW=None):
@@ -451,7 +443,7 @@ class SRU(link.Link):
 
 		with self.init_scope():
 			self.W = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels))
-			self.b = variable.Parameter(initializers._get_initializer(0), out_channels * 2)
+			self.B = variable.Parameter(initializers._get_initializer(0), out_channels * 2)
 
 	def __call__(self, x, initial_ct):
-		return sru(x, self.W, self.b, initial_ct, self.use_tanh)
+		return sru(x, self.W, self.B, initial_ct, self.use_tanh)

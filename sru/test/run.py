@@ -118,6 +118,17 @@ def autograd(X, W, b, initial_ct=None, use_tanh=False):
 
 	return H, C, C[..., -1]
 
+def check_matmul():
+	seq_length = 2
+	batchsize = 3
+	feature_dimension = 4
+	X = np.arange(0, batchsize * feature_dimension * seq_length).astype(np.float32).reshape((batchsize, feature_dimension, seq_length))
+	W = np.arange(0, feature_dimension ** 2 * 3).astype(np.float32).reshape((feature_dimension * 3, feature_dimension))
+	print(X)
+	print(W)
+	U = np.matmul(W, X)
+	print(U)
+	
 def check_backward():
 	seq_length = 2
 	batchsize = 3
@@ -128,8 +139,8 @@ def check_backward():
 	x_gpu = chainer.Variable(x_gpu_data)
 
 	layer = SRU(feature_dimension, feature_dimension, use_tanh=False)
-	output_true, cell_true, _last_cell_true = autograd(x_cpu, layer.W, layer.b, None, layer.use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.b, _last_cell_true, layer.use_tanh)
+	output_true, cell_true, _last_cell_true = autograd(x_cpu, layer.W, layer.B, None, layer.use_tanh)
+	output_true, cell_true, last_cell_true = autograd(x_cpu, layer.W, layer.B, _last_cell_true, layer.use_tanh)
 	layer.cleargrads()
 	functions.sum(output_true).backward()
 
@@ -137,8 +148,8 @@ def check_backward():
 	print(_last_cell_true)
 	print("last_cell_true")
 	print(last_cell_true)
-	print("layer.b.grad")
-	print(layer.b.grad)
+	print("layer.B.grad")
+	print(layer.B.grad)
 
 	layer.to_gpu(gpu_device)
 	output, cell, _last_cell = layer(x_gpu_data, None)
@@ -153,8 +164,8 @@ def check_backward():
 	print(_last_cell)
 	print("last_cell")
 	print(last_cell)
-	print("layer.b.grad")
-	print(layer.b.grad)
+	print("layer.B.grad")
+	print(layer.B.grad)
 
 
 if __name__ == "__main__":
