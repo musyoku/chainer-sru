@@ -94,7 +94,7 @@ def main():
 	vocab_size = max(dataset_train) + 1
 	rnn = RNN(vocab_size, args.hidden_units)
 	load_model(rnn, "model.hdf5")
-	total_iterations = len(dataset_train) // (args.seq_length * args.batchsize) * 0
+	total_iterations_train = len(dataset_train) // (args.seq_length * args.batchsize)
 
 	optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
 	optimizer.setup(rnn)
@@ -112,7 +112,7 @@ def main():
 		start_time = time.time()
 
 		# training
-		for itr in range(total_iterations):
+		for itr in range(total_iterations_train):
 			# sample minbatch
 			batch_offsets = np.random.randint(0, len(dataset_train) - args.seq_length - 1, size=args.batchsize)
 			x_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
@@ -141,32 +141,40 @@ def main():
 
 				sum_loss += float(loss.data)
 
-			printr("{:3.0f}% ({}/{})".format((itr + 1) / total_iterations * 100, itr + 1, total_iterations))
+			printr("Training ... {:3.0f}% ({}/{})".format((itr + 1) / total_iterations_train * 100, itr + 1, total_iterations_train))
 
 		save_model(rnn, "model.hdf5")
 
 		# evaluation
 		with chainer.no_backprop_mode() and chainer.using_config("train", False):
-			x_batch = dataset_dev[:-1]
-			t_batch = dataset_dev[1:]
+			x_sequence = dataset_dev[:-1]
+			t_sequence = dataset_dev[1:]
 			rnn.reset_state()
-			total_iterations = math.ceil(len(x_batch) / args.seq_length)
-			print(total_iterations)
-			for i in range(total_iterations):
-				pass
+			total_iterations_dev = math.ceil(len(x_sequence) / args.seq_length)
+			offset = 0
+			negative_log_p_dataset = 0
+			for itr in range(total_iterations_dev):
+				seq_length = min(offset + args.seq_length, len(x_sequence)) - offset
+				x_batch = x_sequence[None, offset:offset + seq_length]
+				t_batch = flatten(t_sequence[None, offset:offset + seq_length])
 
-			if using_gpu:
-				x_batch = cuda.to_gpu(x_batch)
-				t_batch = cuda.to_gpu(t_batch)
+				if using_gpu:
+					x_batch = cuda.to_gpu(x_batch)
+					t_batch = cuda.to_gpu(t_batch)
 
-			t_batch = flatten(t_batch)
-			
-			y_batch = rnn(x_batch, flatten=True)
-			negative_log_p = F.softmax_cross_entropy(y_batch, t_batch)
-			perplexity = math.exp(float(negative_log_p.data))
+				y_batch = rnn(x_batch, flatten=True)
+				negative_log_p_dataset += float(F.softmax_cross_entropy(y_batch, t_batch).data)
+
+				printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
+				offset += seq_length
+
+			try:
+				perplexity = math.exp(negative_log_p_dataset)
+			except:
+				perplexity = None
 			
 		clear_console()
-		print("Epoch {} done in {} min - loss: {:.6f} - ppl: {}".format(epoch + 1, int((time.time() - start_time) // 60), sum_loss / total_iterations, perplexity))
+		print("Epoch {} done in {} min - loss: {:.6f} - ppl: {}".format(epoch + 1, int((time.time() - start_time) // 60), sum_loss / total_iterations_train, perplexity))
 
 
 
