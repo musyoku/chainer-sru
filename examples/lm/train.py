@@ -177,7 +177,7 @@ def main():
 
 					printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
 					offset += seq_length
-				
+
 				except Exception as e:
 					printr("")
 					print(str(e))

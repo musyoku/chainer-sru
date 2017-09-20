@@ -1,8 +1,12 @@
 from __future__ import division
 from __future__ import print_function
-import sys, os, chainer, time, argparse
+import sys, os, chainer, time, argparse, pylab
+import seaborn as sns
 import numpy as np
+import pandas as pd
 from chainer import cuda, links, functions
+from matplotlib import pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 sys.path.append(os.path.join(".."))
 from sru import SRU
 
@@ -72,9 +76,39 @@ def benchmark_lstm(batchsize, seq_length, feature_dimension, repeat=100):
 
 	return result
 
+def generate_cmap(colors):
+	values = range(len(colors))
+	vmax = np.ceil(np.max(values))
+	color_list = []
+	for v, c in zip(values, colors):
+		color_list.append( ( v/ vmax, c) )
+	return LinearSegmentedColormap.from_list('custom_cmap', color_list)
+	
 def main():
+	sns.set(font_scale=1.5)
+	sns.set_style("whitegrid", {"grid.linestyle": "--"})
+	df = pd.DataFrame({
+		"LSTM": [100, 500],
+		"SRU": [100, 500],
+		})
+
+	df.index = ["forward","backward"]
+	df = df.T
+	print(df)
+
+	pylab.clf()
+	ax = df.plot.barh(stacked=True, cmap=generate_cmap(["#597DBE", "#A0C7F1"]), width=0.2, figsize=(8, 4))
+	ax.set_title("l=32, d=256")
+	ax.set(xlabel="[ms]")
+	fig = ax.get_figure()
+	fig.tight_layout()
+	fig.savefig("benchmark.png")
+
+	raise Exception()
+
+
 	batchsize_list = [16, 32, 64]
-	seq_length_list = [32, 64, 128]
+	seq_length_list = [32, 64]
 	feature_dimension_list = [128, 256, 512]
 	result_sru = []
 	result_lstm = []
@@ -83,6 +117,9 @@ def main():
 			for feature_dimension in feature_dimension_list:
 				result_sru += benchmark_sru(batchsize, seq_length, feature_dimension)
 				result_lstm += benchmark_lstm(batchsize, seq_length, feature_dimension)
+
+	for sru, lstm in zip(result_sru, result_lstm):
+		print(sru, lstm)
 
 if __name__ == '__main__':
 	main()
