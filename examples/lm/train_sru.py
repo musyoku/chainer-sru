@@ -1,275 +1,174 @@
 from __future__ import division
 from __future__ import print_function
-import argparse, sys, os
+import argparse, sys, os, time, uuid, math
 import numpy as np
 import chainer
 import chainer.functions as F
 import chainer.links as L
-from chainer import training
-from chainer.training import extensions
+from chainer import cuda, serializers
 sys.path.append(os.path.join("..", ".."))
 from sru import SRU
+from optim import get_optimizer
 
-# Definition of a recurrent net for language modeling
+def Convolution1D(in_channels, out_channels):
+	return L.ConvolutionND(1, in_channels, out_channels, 1, stride=1, pad=0, nobias=False)
+
 class RNN(chainer.Chain):
-
-	def __init__(self, n_vocab, n_units):
+	def __init__(self, vocab_size, num_hidden_units):
 		super(RNN, self).__init__()
+		self.vocab_size = vocab_size
+		self.num_hidden_units = num_hidden_units
+
 		with self.init_scope():
-			self.embed = L.EmbedID(n_vocab, n_units)
-			self.l1 = SRU(n_units, n_units)
-			self.l2 = SRU(n_units, n_units)
-			self.l3 = L.Linear(n_units, n_vocab)
+			self.embed = L.EmbedID(vocab_size, num_hidden_units)
+			self.l1 = SRU(num_hidden_units, num_hidden_units)
+			self.l2 = SRU(num_hidden_units, num_hidden_units)
+			self.l3 = Convolution1D(num_hidden_units, vocab_size)
 
 		for param in self.params():
 			param.data[...] = np.random.uniform(-0.1, 0.1, param.data.shape)
 
+		self.lc1 = None
+		self.lc2 = None
+
 	def reset_state(self):
-		self.l1.reset_state()
-		self.l2.reset_state()
+		self.lc1 = None
+		self.lc2 = None
 
-	def __call__(self, x):
-		print(x.shape)
+	def __call__(self, x, flatten=False):
+		batchsize, seq_length = x.shape
+		x = x.reshape((-1,))
 		h0 = self.embed(x)
-		h1, c1, lc1 = self.l1(F.dropout(h0), None)
-		h2, c2, lc2 = self.l2(F.dropout(h1), None)
-		y = self.l3(F.dropout(h2))
-		return y
+		h0 = F.reshape(h0, (batchsize, seq_length, -1))
+		h0 = F.transpose(h0, (0, 2, 1))
+		h1, c1, self.lc1 = self.l1(F.dropout(h0), self.lc1)
+		h2, c2, self.lc2 = self.l2(F.dropout(h1), self.lc2)
+		out_data = self.l3(F.dropout(h2))
+		if flatten:
+			out_data = F.reshape(F.swapaxes(out_data, 1, 2), (-1, self.vocab_size))
+		return out_data
 
-# Dataset iterator to create a batch of sequences at different positions.
-# This iterator returns a pair of current words and the next words. Each
-# example is a part of sequences starting from the different offsets
-# equally spaced within the whole sequence.
-class ParallelSequentialIterator(chainer.dataset.Iterator):
+def flatten(t_batch):
+	xp = cuda.get_array_module(t_batch)
+	return xp.reshape(t_batch, (-1,))
 
-	def __init__(self, dataset, batch_size, repeat=True):
-		self.dataset = dataset
-		self.batch_size = batch_size  # batch size
-		# Number of completed sweeps over the dataset. In this case, it is
-		# incremented if every word is visited at least once after the last
-		# increment.
-		self.epoch = 0
-		# True if the epoch is incremented at the last iteration.
-		self.is_new_epoch = False
-		self.repeat = repeat
-		length = len(dataset)
-		# Offsets maintain the position of each sequence in the mini-batch.
-		self.offsets = [i * length // batch_size for i in range(batch_size)]
-		# NOTE: this is not a count of parameter updates. It is just a count of
-		# calls of ``__next__``.
-		self.iteration = 0
-		# use -1 instead of None internally
-		self._previous_epoch_detail = -1.
+def clear_console():
+	printr("")
 
-	def __next__(self):
-		# This iterator returns a list representing a mini-batch. Each item
-		# indicates a different position in the original sequence. Each item is
-		# represented by a pair of two word IDs. The first word is at the
-		# "current" position, while the second word at the next position.
-		# At each iteration, the iteration count is incremented, which pushes
-		# forward the "current" position.
-		length = len(self.dataset)
-		if not self.repeat and self.iteration * self.batch_size >= length:
-			# If not self.repeat, this iterator stops at the end of the first
-			# epoch (i.e., when all words are visited once).
-			raise StopIteration
-		cur_words = self.get_words()
-		self._previous_epoch_detail = self.epoch_detail
-		self.iteration += 1
-		next_words = self.get_words()
+def printr(string):
+	sys.stdout.write("\r\033[2K")
+	sys.stdout.write(string)
+	sys.stdout.flush()
 
-		epoch = self.iteration * self.batch_size // length
-		self.is_new_epoch = self.epoch < epoch
-		if self.is_new_epoch:
-			self.epoch = epoch
+def save_model(model, filename):
+	tmp_filename = str(uuid.uuid4())
+	serializers.save_hdf5(tmp_filename, model)
+	if os.path.isfile(filename):
+		os.remove(filename)
+	os.rename(tmp_filename, filename)
 
-		return list(zip(cur_words, next_words))
-
-	@property
-	def epoch_detail(self):
-		# Floating point version of epoch.
-		return self.iteration * self.batch_size / len(self.dataset)
-
-	@property
-	def previous_epoch_detail(self):
-		if self._previous_epoch_detail < 0:
-			return None
-		return self._previous_epoch_detail
-
-	def get_words(self):
-		# It returns a list of current words.
-		return [self.dataset[(offset + self.iteration) % len(self.dataset)]
-				for offset in self.offsets]
-
-	def serialize(self, serializer):
-		# It is important to serialize the state to be recovered on resume.
-		self.iteration = serializer('iteration', self.iteration)
-		self.epoch = serializer('epoch', self.epoch)
-		try:
-			self._previous_epoch_detail = serializer(
-				'previous_epoch_detail', self._previous_epoch_detail)
-		except KeyError:
-			# guess previous_epoch_detail for older version
-			self._previous_epoch_detail = self.epoch + \
-				(self.current_position - self.batch_size) / len(self.dataset)
-			if self.epoch_detail > 0:
-				self._previous_epoch_detail = max(
-					self._previous_epoch_detail, 0.)
-			else:
-				self._previous_epoch_detail = -1.
-
-
-# Custom updater for truncated BackProp Through Time (BPTT)
-class BPTTUpdater(training.StandardUpdater):
-
-	def __init__(self, train_iter, optimizer, bprop_len, device):
-		super(BPTTUpdater, self).__init__(
-			train_iter, optimizer, device=device)
-		self.bprop_len = bprop_len
-
-	# The core part of the update routine can be customized by overriding.
-	def update_core(self):
-		loss = 0
-		# When we pass one iterator and optimizer to StandardUpdater.__init__,
-		# they are automatically named 'main'.
-		train_iter = self.get_iterator('main')
-		optimizer = self.get_optimizer('main')
-
-		# Progress the dataset iterator for bprop_len words at each iteration.
-		for i in range(self.bprop_len):
-			# Get the next batch (a list of tuples of two word IDs)
-			batch = train_iter.__next__()
-
-			# Concatenate the word IDs to matrices and send them to the device
-			# self.converter does this job
-			# (it is chainer.dataset.concat_examples by default)
-			x, t = self.converter(batch, self.device)
-
-			# Compute the loss at this time step and accumulate it
-			loss += optimizer.target(chainer.Variable(x), chainer.Variable(t))
-
-		optimizer.target.cleargrads()  # Clear the parameter gradients
-		loss.backward()  # Backprop
-		loss.unchain_backward()  # Truncate the graph
-		optimizer.update()  # Update the parameters
-
-
-# Routine to rewrite the result dictionary of LogReport to add perplexity
-# values
-def compute_perplexity(result):
-	result['perplexity'] = np.exp(result['main/loss'])
-	if 'validation/main/loss' in result:
-		result['val_perplexity'] = np.exp(result['validation/main/loss'])
-
-
-def _main():
-	parser = argparse.ArgumentParser()
-	parser.add_argument('--batchsize', '-b', type=int, default=64,
-						help='Number of examples in each mini-batch')
-	parser.add_argument('--bproplen', '-l', type=int, default=35,
-						help='Number of words in each mini-batch '
-							 '(= length of truncated BPTT)')
-	parser.add_argument('--epoch', '-e', type=int, default=39,
-						help='Number of sweeps over the dataset to train')
-	parser.add_argument('--gpu', '-g', type=int, default=-1,
-						help='GPU ID (negative value indicates CPU)')
-	parser.add_argument('--gradclip', '-c', type=float, default=5,
-						help='Gradient norm threshold to clip')
-	parser.add_argument('--out', '-o', default='result',
-						help='Directory to output the result')
-	parser.add_argument('--resume', '-r', default='',
-						help='Resume the training from snapshot')
-	parser.add_argument('--test', action='store_true',
-						help='Use tiny datasets for quick tests')
-	parser.set_defaults(test=False)
-	parser.add_argument('--unit', '-u', type=int, default=650,
-						help='Number of LSTM units in each layer')
-	parser.add_argument('--model', '-m', default='model.npz',
-						help='Model file name to serialize')
-	args = parser.parse_args()
-
-	# Load the Penn Tree Bank long word sequence dataset
-	train, val, test = chainer.datasets.get_ptb_words()
-	n_vocab = max(train) + 1  # train is just an array of integers
-	print('#vocab =', n_vocab)
-
-	if args.test:
-		train = train[:100]
-		val = val[:100]
-		test = test[:100]
-
-	train_iter = ParallelSequentialIterator(train, args.batchsize)
-	val_iter = ParallelSequentialIterator(val, 1, repeat=False)
-	test_iter = ParallelSequentialIterator(test, 1, repeat=False)
-
-	# Prepare an RNNLM model
-	rnn = RNNForLM(n_vocab, args.unit)
-	model = L.Classifier(rnn)
-	model.compute_accuracy = False  # we only want the perplexity
-	if args.gpu >= 0:
-		# Make a specified GPU current
-		chainer.cuda.get_device_from_id(args.gpu).use()
-		model.to_gpu()
-
-	# Set up an optimizer
-	optimizer = chainer.optimizers.SGD(lr=1.0)
-	optimizer.setup(model)
-	optimizer.add_hook(chainer.optimizer.GradientClipping(args.gradclip))
-
-	# Set up a trainer
-	updater = BPTTUpdater(train_iter, optimizer, args.bproplen, args.gpu)
-	trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=args.out)
-
-	eval_model = model.copy()  # Model with shared params and distinct states
-	eval_rnn = eval_model.predictor
-	trainer.extend(extensions.Evaluator(val_iter, eval_model, device=args.gpu, eval_hook=lambda _: eval_rnn.reset_state()))
-
-	interval = 10 if args.test else 500
-	trainer.extend(extensions.LogReport(postprocess=compute_perplexity, trigger=(interval, 'iteration')))
-	trainer.extend(extensions.PrintReport(
-		['epoch', 'iteration', 'perplexity', 'val_perplexity']
-	), trigger=(interval, 'iteration'))
-	trainer.extend(extensions.ProgressBar(update_interval=1 if args.test else 10))
-	trainer.extend(extensions.snapshot())
-	trainer.extend(extensions.snapshot_object(
-		model, 'model_iter_{.updater.iteration}'))
-	if args.resume:
-		chainer.serializers.load_npz(args.resume, trainer)
-
-	trainer.run()
-
-	# Evaluate the final model
-	print('test')
-	eval_rnn.reset_state()
-	evaluator = extensions.Evaluator(test_iter, eval_model, device=args.gpu)
-	result = evaluator()
-	print('test perplexity:', np.exp(float(result['main/loss'])))
-
-	# Serialize the final model
-	chainer.serializers.save_npz(args.model, model)
+def load_model(model, filename):
+	if os.path.isfile(filename):
+		print("Loading {} ...".format(filename))
+		serializers.load_hdf5(filename, model)
+		return True
+	return False
+		
 
 def main():
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--batchsize', '-b', type=int, default=64, help='Number of examples in each mini-batch')
-	parser.add_argument('--seq-length', '-l', type=int, default=35, help='Number of words in each mini-batch (= length of truncated BPTT)')
-	parser.add_argument('--total-epochs', '-e', type=int, default=39, help='Number of sweeps over the dataset to train')
-	parser.add_argument('--gpu', '-g', type=int, default=0, help='GPU ID (negative value indicates CPU)')
-	parser.add_argument('--gradclip', '-c', type=float, default=5, help='Gradient norm threshold to clip')
-	parser.add_argument('--unit', '-u', type=int, default=650, help='Number of LSTM units in each layer')
+	parser.add_argument("--batchsize", "-b", type=int, default=64, help="Number of examples in each mini-batch")
+	parser.add_argument("--seq-length", "-l", type=int, default=35, help="Number of words in each mini-batch")
+	parser.add_argument("--total-epochs", "-e", type=int, default=39, help="Number of sweeps over the dataset to train")
+	parser.add_argument("--gpu-device", "-g", type=int, default=0, help="GPU ID (negative value indicates CPU)")
+	parser.add_argument("--grad-clip", "-gc", type=float, default=5, help="Gradient norm threshold to clip")
+	parser.add_argument("--learning-rate", "-lr", type=float, default=0.001, help="Gradient norm threshold to clip")
+	parser.add_argument("--momentum", "-mo", type=float, default=0.9, help="Gradient norm threshold to clip")
+	parser.add_argument("--optimizer", "-opt", type=str, default="msgd")
+	parser.add_argument("--hidden-units", "-hu", type=int, default=650, help="Number of SRU units in each layer")
 	args = parser.parse_args()
 
 	dataset_train, dataset_dev, dataset_test = chainer.datasets.get_ptb_words()
+	dataset_dev = np.asarray(dataset_dev, dtype=np.int32)
 
 	vocab_size = max(dataset_train) + 1
-	rnn = RNN(vocab_size, args.unit)
+	rnn = RNN(vocab_size, args.hidden_units)
+	load_model(rnn, "model.hdf5")
+	total_iterations = len(dataset_train) // (args.seq_length * args.batchsize) * 0
+
+	optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
+	optimizer.setup(rnn)
+	optimizer.add_hook(chainer.optimizer.GradientClipping(args.grad_clip))
+
+	using_gpu = False
+	if args.gpu_device >= 0:
+		cuda.get_device(args.gpu_device).use()
+		rnn.to_gpu()
+		using_gpu = True
 
 	for epoch in range(args.total_epochs):
-		batch_offsets = np.random.randint(0, len(dataset_train) - args.seq_length, size=args.batchsize)
-		batch = np.empty((args.batchsize, args.seq_length), dtype=int)
-		for batch_index, offset in enumerate(batch_offsets):
-			sequence = dataset_train[offset:offset + args.seq_length]
-			batch[batch_index] = sequence
+
+		sum_loss = 0
+		start_time = time.time()
+
+		# training
+		for itr in range(total_iterations):
+			# sample minbatch
+			batch_offsets = np.random.randint(0, len(dataset_train) - args.seq_length - 1, size=args.batchsize)
+			x_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
+			t_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
+			for batch_index, offset in enumerate(batch_offsets):
+				sequence = dataset_train[offset:offset + args.seq_length]
+				teacher = dataset_train[offset + 1:offset + args.seq_length + 1]
+				x_batch[batch_index] = sequence
+				t_batch[batch_index] = teacher
+
+			if using_gpu:
+				x_batch = cuda.to_gpu(x_batch)
+				t_batch = cuda.to_gpu(t_batch)
+
+			t_batch = flatten(t_batch)
+
+			# update model parameters
+			with chainer.using_config("train", True):
+				rnn.reset_state()
+				y_batch = rnn(x_batch, flatten=True)
+				loss = F.softmax_cross_entropy(y_batch, t_batch)
+
+				rnn.cleargrads()
+				loss.backward()
+				optimizer.update()
+
+				sum_loss += float(loss.data)
+
+			printr("{:3.0f}% ({}/{})".format((itr + 1) / total_iterations * 100, itr + 1, total_iterations))
+
+		save_model(rnn, "model.hdf5")
+
+		# evaluation
+		with chainer.no_backprop_mode() and chainer.using_config("train", False):
+			x_batch = dataset_dev[:-1]
+			t_batch = dataset_dev[1:]
+			rnn.reset_state()
+			total_iterations = math.ceil(len(x_batch) / args.seq_length)
+			print(total_iterations)
+			for i in range(total_iterations):
+				pass
+
+			if using_gpu:
+				x_batch = cuda.to_gpu(x_batch)
+				t_batch = cuda.to_gpu(t_batch)
+
+			t_batch = flatten(t_batch)
+			
+			y_batch = rnn(x_batch, flatten=True)
+			negative_log_p = F.softmax_cross_entropy(y_batch, t_batch)
+			perplexity = math.exp(float(negative_log_p.data))
+			
+		clear_console()
+		print("Epoch {} done in {} min - loss: {:.6f} - ppl: {}".format(epoch + 1, int((time.time() - start_time) // 60), sum_loss / total_iterations, perplexity))
 
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
 	main()

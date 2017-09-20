@@ -264,7 +264,7 @@ class SRUFunction(Function):
 				ct_type.shape[1] == x_type.shape[1],
 			)
 
-	# x: (batchsize, seq_length, feature_dimension)
+	# x: (batchsize, feature_dimension, seq_length)
 	def forward_cpu(self, inputs):
 		X, W, B = inputs[:3]
 		batchsize, feature_dimension, seq_length = X.shape
@@ -301,6 +301,7 @@ class SRUFunction(Function):
 
 		return H, C, C[..., -1]
 
+	# x: (batchsize, feature_dimension, seq_length)
 	def forward_gpu(self, inputs):
 		X, W, B = _as_contiguous(inputs[:3])
 		xp = cuda.get_array_module(W)
