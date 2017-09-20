@@ -183,7 +183,7 @@ def main():
 				perplexity = None
 			
 		clear_console()
-		print("Epoch {} done in {} min - loss: {:.6f} - likelihood: {} - ppl: {} - lr: {:.3f} - total {} min".format(
+		print("Epoch {} done in {} min - loss: {:.6f} - log_likelihood: {} - ppl: {} - lr: {:.3f} - total {} min".format(
 			epoch + 1, int((time.time() - epoch_start_time) // 60), sum_loss / total_iterations_train, 
 			int(-negative_log_likelihood), int(perplexity), get_current_learning_rate(optimizer),
 			int((time.time() - training_start_time) // 60)))

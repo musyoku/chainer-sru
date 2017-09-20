@@ -310,12 +310,6 @@ class SRUFunction(Function):
 		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		U = xp.matmul(W, X)
-		# print(U.shape)
-		# print(U)
-		# initial_ct += xp.random.uniform(size=(batchsize, feature_dimension))
-		# initial_ct = X[..., 0]
-		# print(initial_ct.data.ptr)
-		# print(initial_ct)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
@@ -323,8 +317,7 @@ class SRUFunction(Function):
 
 		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
 		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
-		# print(X.shape)
-		# print(U.shape)
+		
 		_cuda_elementwise("forward", 
 			args=[
 				X.data.ptr,
@@ -341,10 +334,6 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		# import numpy
-		# numpy.set_printoptions(suppress=True)
-		# print(initial_ct)
-		# print(cuda.to_cpu(H).astype(numpy.float32))
 		self.C = C
 		self.H = H
 		return H, C, C[..., -1]
@@ -372,21 +361,6 @@ class SRUFunction(Function):
 
 		incoming_grad_ct = xp.zeros_like(initial_ct) if grad_outputs[2] is None else _as_contiguous(grad_outputs[2])
 		incoming_grad_h = xp.zeros_like(self.H) if grad_outputs[0] is None else _as_contiguous(grad_outputs[0])
-		# print(incoming_grad_h.flags)
-		# print(incoming_grad_h.flags)
-
-
-		# print(X.flags)
-		# print(U.flags)
-		# print(B.flags)
-		# print(self.C.flags)
-		# print(initial_ct.flags)
-		# print(incoming_grad_h.flags)
-		# print(incoming_grad_ct.flags)
-		# print(grad_highway_x.flags)
-		# print(grad_w.flags)
-		# print(grad_b.flags)
-		# print(grad_initial_ct.flags)
 
 		_cuda_elementwise("backward", 
 			args=[
@@ -409,56 +383,14 @@ class SRUFunction(Function):
 			], 
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
-		# cuda.cupy.ElementwiseKernel(
-		# 	'float32 x',
-		# 	'float32 h',
-		# 	'''
-		# 	h = i;
-		# 	''',
-		# 	'reduce_probability')(grad_x, grad_h)
-
-		# print("ElementwiseKernel")
-		# print(grad_h)
-		# print(grad_x)
-
-		# _cuda_elementwise("backward_test", 
-		# 	args=[
-		# 		grad_h.data.ptr,
-		# 		grad_x.data.ptr,
-		# 		batchsize,
-		# 		feature_dimension,
-		# 		seq_length,
-		# 		self.use_tanh
-		# 	], 
-		# 	block=(thread_per_block, 1, 1), 
-		# 	grid=(num_block, 1, 1))
 
 		grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
-		# grad_u = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
-
 		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
-		# grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
 		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
-		# print(grad_w.shape)
-		# print(X.shape)
-		# print(W.shape)
 		grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
-		# print(grad_w)
 
-		# print("_cuda_elementwise")
-		# np.set_printoptions(suppress=True)
-		# print("grad_x")
-		# print(grad_x)
-		# print("grad_highway_x")
-		# print(grad_highway_x)
 		grad_b = xp.sum(grad_b, axis=(0, 2))
-		# print("grad_b")
-		# print(grad_b)
-		# print("grad_initial_ct")
-		# print(grad_initial_ct)
-		# print("incoming_grad_ct")
-		# print(incoming_grad_ct)
 
 		if len(inputs) == 4:
 			return grad_x, grad_w, grad_b, grad_initial_ct
