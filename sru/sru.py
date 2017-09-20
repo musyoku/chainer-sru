@@ -10,7 +10,8 @@ extern "C"
 	__forceinline__ __device__ 
 	float sigmoidf(float x)
 	{
-		return 1.0f / (1.0f + expf(-x));
+		//return 1.0f / (1.0f + expf(-x));
+		return tanh(x * 0.5f) * 0.5f + 0.5f;
 	}
 
 	__global__ 
@@ -65,7 +66,7 @@ extern "C"
 			ht_ptr += 1;
 			ct_ptr += 1;
 			xt_ptr += 1;
-			uzt_ptr  += 1;
+			uzt_ptr += 1;
 			uft_ptr += 1;
 			urt_ptr += 1;
 		}
@@ -122,7 +123,7 @@ extern "C"
 		xt_ptr  += seq_length - 1;
 		urt_ptr += seq_length - 1;
 		uft_ptr += seq_length - 1;
-		uzt_ptr  += seq_length - 1;
+		uzt_ptr += seq_length - 1;
 		ct_ptr  += seq_length - 1;
 		grad_highway_xt_ptr += seq_length - 1;
 		grad_brt_ptr += seq_length - 1;
@@ -169,9 +170,9 @@ extern "C"
 			uft_ptr -= 1;
 			uzt_ptr -= 1;
 			ct_ptr  -= 1;
-			incoming_grad_ht_ptr  -= 1;
-			grad_highway_xt_ptr  -= 1;
-			grad_uzt_ptr  -= 1;
+			incoming_grad_ht_ptr -= 1;
+			grad_highway_xt_ptr -= 1;
+			grad_uzt_ptr -= 1;
 			grad_brt_ptr -= 1;
 			grad_bft_ptr -= 1;
 		}
@@ -216,10 +217,22 @@ def _cuda_elementwise(name, args, block, grid):
 def _np_sigmoid(x):
 	return 1 / (1 + np.exp(-x))
 
-def _as_contiguous(array):
-	if array.flags.c_contiguous is False:
-		array = cupy.ascontiguousarray(array)
-	return array
+def _as_contiguous(args):
+	if isinstance(args, (list, tuple)):
+		ret = []
+		for arg in args:
+			if arg is None:
+				ret.append(None)
+				continue
+			if arg.flags.c_contiguous is False:
+				arg = cupy.ascontiguousarray(arg)
+			ret.append(cupy.ascontiguousarray(arg))
+		return ret
+
+	if args.flags.c_contiguous is False:
+		args = cupy.ascontiguousarray(args)
+
+	return args
 
 class SRUFunction(Function):
 
@@ -289,7 +302,7 @@ class SRUFunction(Function):
 		return H, C, C[..., -1]
 
 	def forward_gpu(self, inputs):
-		X, W, B = inputs[:3]
+		X, W, B = _as_contiguous(inputs[:3])
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 
@@ -339,7 +352,7 @@ class SRUFunction(Function):
 		raise NotImplementedError()
 
 	def backward_gpu(self, inputs, grad_outputs):
-		X, W, B = inputs[:3]
+		X, W, B = _as_contiguous(inputs[:3])
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
@@ -424,28 +437,27 @@ class SRUFunction(Function):
 
 		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
-		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
-		print(grad_w.shape)
-		print(X.shape)
-		print(W.shape)
+		# grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
+		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
+		# print(grad_w.shape)
+		# print(X.shape)
+		# print(W.shape)
 		grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
-		print(grad_w)
-
-
+		# print(grad_w)
 
 		# print("_cuda_elementwise")
-		np.set_printoptions(suppress=True)
-		print("grad_x")
-		print(grad_x)
-		print("grad_highway_x")
-		print(grad_highway_x)
+		# np.set_printoptions(suppress=True)
+		# print("grad_x")
+		# print(grad_x)
+		# print("grad_highway_x")
+		# print(grad_highway_x)
 		grad_b = xp.sum(grad_b, axis=(0, 2))
-		print("grad_b")
-		print(grad_b)
-		print("grad_initial_ct")
-		print(grad_initial_ct)
-		print("incoming_grad_ct")
-		print(incoming_grad_ct)
+		# print("grad_b")
+		# print(grad_b)
+		# print("grad_initial_ct")
+		# print(grad_initial_ct)
+		# print("incoming_grad_ct")
+		# print(incoming_grad_ct)
 
 		if len(inputs) == 4:
 			return grad_x, grad_w, grad_b, grad_initial_ct
