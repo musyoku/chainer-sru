@@ -146,61 +146,63 @@ def check_matmul_grad():
 	print(X.grad)
 	print(xp.sum(W.data, axis=0))
 
-# @profile
+@profile
 def check_forward(batchsize, feature_dimension, seq_length, use_tanh):
 	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 20
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
 
-	# get true output
-	layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., :seq_length], layer.W, layer.B, None, layer.use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh)
+	with chainer.no_backprop_mode() and chainer.using_config("train", False):
+		# get true output
+		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh)
+		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., :seq_length], layer.W, layer.B, None, layer.use_tanh)
+		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh)
+		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh)
 
-	# get cuda output
-	layer.to_gpu(gpu_device)
-	output, cell, last_cell = layer(x_gpu_data[..., :seq_length], None)
-	output, cell, last_cell = layer(x_gpu_data[..., seq_length:seq_length*2], last_cell)
-	output, cell, last_cell = layer(x_gpu_data[..., seq_length*2:], last_cell)
+		# get cuda output
+		layer.to_gpu(gpu_device)
+		output, cell, last_cell = layer(x_gpu_data[..., :seq_length], None)
+		output, cell, last_cell = layer(x_gpu_data[..., seq_length:seq_length*2], last_cell)
+		output, cell, last_cell = layer(x_gpu_data[..., seq_length*2:], last_cell)
 
 	threshold = 1e-5
 	assert(xp.mean(abs(output_true.data - cuda.to_cpu(output.data))) <= threshold), xp.mean(abs(output_true.data - cuda.to_cpu(output.data)))
 	assert(xp.mean(abs(cell_true.data - cuda.to_cpu(cell.data))) <= threshold), xp.mean(abs(cell_true.data - cuda.to_cpu(cell.data)))
 	assert(xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data))) <= threshold), xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data)))
 
-# @profile
+@profile
 def check_backward(batchsize, feature_dimension, seq_length, use_tanh):
 	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 5
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
 	x_cpu = chainer.Variable(x_cpu_data)
 	x_gpu = chainer.Variable(x_gpu_data)
 
-	# get true output
-	layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu[..., :seq_length], layer.W, layer.B, None, layer.use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh)
-	output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh)
+	with chainer.using_config("train", True):
+		# get true output
+		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh)
+		output_true, cell_true, last_cell_true = autograd(x_cpu[..., :seq_length], layer.W, layer.B, None, layer.use_tanh)
+		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh)
+		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh)
 
-	layer.cleargrads()
-	functions.sum(output_true).backward()
+		layer.cleargrads()
+		functions.sum(output_true).backward()
 
-	b_grad_true = layer.B.grad.copy()
-	w_grad_true = layer.W.grad.copy()
-	x_grad_true = x_cpu.grad.copy()
+		b_grad_true = layer.B.grad.copy()
+		w_grad_true = layer.W.grad.copy()
+		x_grad_true = x_cpu.grad.copy()
 
-	# print("last_cell_true")
-	# print(last_cell_true)
+		# print("last_cell_true")
+		# print(last_cell_true)
 
-	layer.to_gpu(gpu_device)
-	output, cell, last_cell = layer(x_gpu[..., :seq_length], None)
-	output, cell, last_cell = layer(x_gpu[..., seq_length:seq_length*2], last_cell)
-	output, cell, last_cell = layer(x_gpu[..., seq_length*2:], last_cell)
+		layer.to_gpu(gpu_device)
+		output, cell, last_cell = layer(x_gpu[..., :seq_length], None)
+		output, cell, last_cell = layer(x_gpu[..., seq_length:seq_length*2], last_cell)
+		output, cell, last_cell = layer(x_gpu[..., seq_length*2:], last_cell)
 
-	# print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
-	# print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
-	
-	layer.cleargrads()
-	functions.sum(output).backward()
+		# print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
+		# print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
+		
+		layer.cleargrads()
+		functions.sum(output).backward()
 	# print("last_cell")
 	# print(last_cell)
 
