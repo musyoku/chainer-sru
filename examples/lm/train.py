@@ -176,7 +176,7 @@ def main():
 				perplexity = None
 			
 		clear_console()
-		print("Epoch {} done in {} min - loss: {:.6f} - likelihood: {} - ppl: {} - total {} min".format(epoch + 1, int((time.time() - epoch_start_time) // 60), sum_loss / total_iterations_train, int(-negative_log_likelihood), int(perplexity), int((time.time() - training_start_time) // 60)))
+		print("Epoch {} done in {} min - loss: {:.6f} - likelihood: {} - ppl: {} - total {} min".format(epoch + 1, int((time.time() - epoch_start_time) // 60), sum_loss / total_iterations_train, int(-negative_log_likelihood), perplexity, int((time.time() - training_start_time) // 60)))
 
 		if epoch > 175:
 			decay_learning_rate(optimizer, 0.98, 1e-7)
