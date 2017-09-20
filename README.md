@@ -7,8 +7,8 @@
 - [x] CUDA optimized forward computation
 - [x] CUDA optimized backward computation
 - [x] Testing
+- [x] Training language models
 - [ ] Benchmark
-- [ ] Training language models
 
 ## Requirements
 

@@ -8,7 +8,7 @@ import chainer.links as L
 from chainer import cuda, serializers
 sys.path.append(os.path.join("..", ".."))
 from sru import SRU
-from optim import get_optimizer
+from optim import get_optimizer, decrease_learning_rate, get_current_learning_rate
 
 def Convolution1D(in_channels, out_channels):
 	return L.ConvolutionND(1, in_channels, out_channels, 1, stride=1, pad=0, nobias=False)
@@ -86,6 +86,7 @@ def main():
 	parser.add_argument("--momentum", "-mo", type=float, default=0.9, help="Gradient norm threshold to clip")
 	parser.add_argument("--optimizer", "-opt", type=str, default="msgd")
 	parser.add_argument("--hidden-units", "-hu", type=int, default=650, help="Number of SRU units in each layer")
+	parser.add_argument("--lr-decreasing-start-epoch", "-lrd", type=int, default=175)
 	args = parser.parse_args()
 
 	dataset_train, dataset_dev, dataset_test = chainer.datasets.get_ptb_words()
@@ -115,35 +116,41 @@ def main():
 
 		# training
 		for itr in range(total_iterations_train):
-			# sample minbatch
-			batch_offsets = np.random.randint(0, len(dataset_train) - args.seq_length - 1, size=args.batchsize)
-			x_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
-			t_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
-			for batch_index, offset in enumerate(batch_offsets):
-				sequence = dataset_train[offset:offset + args.seq_length]
-				teacher = dataset_train[offset + 1:offset + args.seq_length + 1]
-				x_batch[batch_index] = sequence
-				t_batch[batch_index] = teacher
 
-			if using_gpu:
-				x_batch = cuda.to_gpu(x_batch)
-				t_batch = cuda.to_gpu(t_batch)
+			try:
+				# sample minbatch
+				batch_offsets = np.random.randint(0, len(dataset_train) - args.seq_length - 1, size=args.batchsize)
+				x_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
+				t_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
+				for batch_index, offset in enumerate(batch_offsets):
+					sequence = dataset_train[offset:offset + args.seq_length]
+					teacher = dataset_train[offset + 1:offset + args.seq_length + 1]
+					x_batch[batch_index] = sequence
+					t_batch[batch_index] = teacher
 
-			t_batch = flatten(t_batch)
+				if using_gpu:
+					x_batch = cuda.to_gpu(x_batch)
+					t_batch = cuda.to_gpu(t_batch)
 
-			# update model parameters
-			with chainer.using_config("train", True):
-				rnn.reset_state()
-				y_batch = rnn(x_batch, flatten=True)
-				loss = F.softmax_cross_entropy(y_batch, t_batch)
+				t_batch = flatten(t_batch)
 
-				rnn.cleargrads()
-				loss.backward()
-				optimizer.update()
+				# update model parameters
+				with chainer.using_config("train", True):
+					rnn.reset_state()
+					y_batch = rnn(x_batch, flatten=True)
+					loss = F.softmax_cross_entropy(y_batch, t_batch)
 
-				sum_loss += float(loss.data)
+					rnn.cleargrads()
+					loss.backward()
+					optimizer.update()
 
-			printr("Training ... {:3.0f}% ({}/{})".format((itr + 1) / total_iterations_train * 100, itr + 1, total_iterations_train))
+					sum_loss += float(loss.data)
+
+				printr("Training ... {:3.0f}% ({}/{})".format((itr + 1) / total_iterations_train * 100, itr + 1, total_iterations_train))
+
+			except Exception as e:
+				printr("")
+				print(str(e))
 
 		save_model(rnn, "model.hdf5")
 
@@ -176,10 +183,13 @@ def main():
 				perplexity = None
 			
 		clear_console()
-		print("Epoch {} done in {} min - loss: {:.6f} - likelihood: {} - ppl: {} - total {} min".format(epoch + 1, int((time.time() - epoch_start_time) // 60), sum_loss / total_iterations_train, int(-negative_log_likelihood), perplexity, int((time.time() - training_start_time) // 60)))
+		print("Epoch {} done in {} min - loss: {:.6f} - likelihood: {} - ppl: {} - lr: {:.3f} - total {} min".format(
+			epoch + 1, int((time.time() - epoch_start_time) // 60), sum_loss / total_iterations_train, 
+			int(-negative_log_likelihood), int(perplexity), get_current_learning_rate(optimizer),
+			int((time.time() - training_start_time) // 60)))
 
-		if epoch > 175:
-			decay_learning_rate(optimizer, 0.98, 1e-7)
+		if epoch >= args.lr_decreasing_start_epoch:
+			decrease_learning_rate(optimizer, 0.98, 1e-7)
 
 if __name__ == "__main__":
 	main()

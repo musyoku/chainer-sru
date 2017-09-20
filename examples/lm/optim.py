@@ -22,7 +22,7 @@ def get_optimizer(name, lr, momentum):
 		return optimizers.Adam(alpha=lr, beta1=momentum)
 	raise NotImplementedError()
 
-def decay_learning_rate(opt, factor, final_value):
+def decrease_learning_rate(opt, factor, final_value):
 	if isinstance(opt, optimizers.NesterovAG):
 		if opt.lr <= final_value:
 			return final_value
