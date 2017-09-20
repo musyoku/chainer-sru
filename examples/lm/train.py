@@ -163,24 +163,26 @@ def main():
 			offset = 0
 			negative_log_likelihood = 0
 			for itr in range(total_iterations_dev):
-				seq_length = min(offset + args.seq_length, len(x_sequence)) - offset
-				x_batch = x_sequence[None, offset:offset + seq_length]
-				t_batch = flatten(t_sequence[None, offset:offset + seq_length])
+				try:
+					seq_length = min(offset + args.seq_length, len(x_sequence)) - offset
+					x_batch = x_sequence[None, offset:offset + seq_length]
+					t_batch = flatten(t_sequence[None, offset:offset + seq_length])
 
-				if using_gpu:
-					x_batch = cuda.to_gpu(x_batch)
-					t_batch = cuda.to_gpu(t_batch)
+					if using_gpu:
+						x_batch = cuda.to_gpu(x_batch)
+						t_batch = cuda.to_gpu(t_batch)
 
-				y_batch = rnn(x_batch, flatten=True)
-				negative_log_likelihood += float(xp.sum(F.softmax_cross_entropy(y_batch, t_batch, reduce="no").data))
+					y_batch = rnn(x_batch, flatten=True)
+					negative_log_likelihood += float(xp.sum(F.softmax_cross_entropy(y_batch, t_batch, reduce="no").data))
 
-				printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
-				offset += seq_length
+					printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
+					offset += seq_length
+				
+				except Exception as e:
+					printr("")
+					print(str(e))
 
-			try:
-				perplexity = math.exp(negative_log_likelihood / len(dataset_dev))
-			except:
-				perplexity = None
+			perplexity = math.exp(negative_log_likelihood / len(dataset_dev))
 			
 		clear_console()
 		print("Epoch {} done in {} min - loss: {:.6f} - log_likelihood: {} - ppl: {} - lr: {:.3f} - total {} min".format(
