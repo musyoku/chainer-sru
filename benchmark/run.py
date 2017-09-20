@@ -1,13 +1,16 @@
 from __future__ import division
 from __future__ import print_function
-import sys, os, chainer, time
+import sys, os, chainer, time, argparse
 import numpy as np
 from chainer import cuda, links, functions
 sys.path.append(os.path.join(".."))
 from sru import SRU
 
-gpu_device = 0
-cuda.get_device(gpu_device).use()
+parser = argparse.ArgumentParser()
+parser.add_argument("--gpu-device", "-g", type=int, default=0)
+args = parser.parse_args()
+
+cuda.get_device(args.gpu_device).use()
 
 def benchmark_sru(batchsize, seq_length, feature_dimension, repeat=100):
 	layer = SRU(feature_dimension, feature_dimension)
