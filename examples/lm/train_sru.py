@@ -170,13 +170,12 @@ def main():
 				offset += seq_length
 
 			try:
-				perplexity = math.exp(negative_log_likelihood)
+				perplexity = math.exp(negative_log_likelihood / len(dataset_dev))
 			except:
 				perplexity = None
 			
 		clear_console()
 		print("Epoch {} done in {} min - loss: {:.6f} - likelihood: {} - ppl: {}".format(epoch + 1, int((time.time() - start_time) // 60), sum_loss / total_iterations_train, -negative_log_likelihood, perplexity))
-
 
 
 if __name__ == "__main__":
