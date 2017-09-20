@@ -1,6 +1,8 @@
 # [WIP]CUDA Optimized Simple Recurrent Unit (SRU)
 
-### ToDo
+- [Training RNNs as Fast as CNNs](https://arxiv.org/abs/1709.02755)
+
+#### ToDo
 
 - [x] CUDA optimized forward computation
 - [x] CUDA optimized backward computation
