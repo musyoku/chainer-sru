@@ -105,6 +105,7 @@ def main():
 		cuda.get_device(args.gpu_device).use()
 		rnn.to_gpu()
 		using_gpu = True
+	xp = rnn.xp
 
 	for epoch in range(args.total_epochs):
 
@@ -152,7 +153,7 @@ def main():
 			rnn.reset_state()
 			total_iterations_dev = math.ceil(len(x_sequence) / args.seq_length)
 			offset = 0
-			negative_log_p_dataset = 0
+			negative_log_likelihood = 0
 			for itr in range(total_iterations_dev):
 				seq_length = min(offset + args.seq_length, len(x_sequence)) - offset
 				x_batch = x_sequence[None, offset:offset + seq_length]
@@ -163,18 +164,18 @@ def main():
 					t_batch = cuda.to_gpu(t_batch)
 
 				y_batch = rnn(x_batch, flatten=True)
-				negative_log_p_dataset += float(F.softmax_cross_entropy(y_batch, t_batch).data)
+				negative_log_likelihood += float(xp.sum(F.softmax_cross_entropy(y_batch, t_batch, reduce="no").data))
 
 				printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
 				offset += seq_length
 
 			try:
-				perplexity = math.exp(negative_log_p_dataset)
+				perplexity = math.exp(negative_log_likelihood)
 			except:
 				perplexity = None
 			
 		clear_console()
-		print("Epoch {} done in {} min - loss: {:.6f} - ppl: {}".format(epoch + 1, int((time.time() - start_time) // 60), sum_loss / total_iterations_train, perplexity))
+		print("Epoch {} done in {} min - loss: {:.6f} - likelihood: {} - ppl: {}".format(epoch + 1, int((time.time() - start_time) // 60), sum_loss / total_iterations_train, -negative_log_likelihood, perplexity))
 
 
 
