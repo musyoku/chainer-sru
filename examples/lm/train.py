@@ -95,6 +95,7 @@ def main():
 	vocab_size = max(dataset_train) + 1
 	rnn = RNN(vocab_size, args.hidden_units)
 	load_model(rnn, "model.hdf5")
+
 	total_iterations_train = len(dataset_train) // (args.seq_length * args.batchsize)
 
 	optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
@@ -143,6 +144,7 @@ def main():
 				optimizer.update()
 
 				sum_loss += float(loss.data)
+				assert sum_loss == sum_loss, "Encountered NaN!"
 
 			printr("Training ... {:3.0f}% ({}/{})".format((itr + 1) / total_iterations_train * 100, itr + 1, total_iterations_train))
 
@@ -171,10 +173,11 @@ def main():
 			printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
 			offset += seq_length
 
+		assert negative_log_likelihood == negative_log_likelihood, "Encountered NaN!"
 		perplexity = math.exp(negative_log_likelihood / len(dataset_dev))
 			
 		clear_console()
-		print("Epoch {} done in {} sec - loss: {:.6f} - log_likelihood: {} - ppl: {} - lr: {:.3f} - total {} min".format(
+		print("Epoch {} done in {} sec - loss: {:.6f} - log_likelihood: {} - ppl: {} - lr: {:.3g} - total {} min".format(
 			epoch + 1, int(time.time() - epoch_start_time), sum_loss / total_iterations_train, 
 			int(-negative_log_likelihood), int(perplexity), get_current_learning_rate(optimizer),
 			int((time.time() - training_start_time) // 60)))
