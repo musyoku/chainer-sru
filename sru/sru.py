@@ -193,8 +193,12 @@ elif hasattr(compiler, "nvcc"):					# CuPy v1
 else:
 	raise NotImplementedError()
 ptx = nvcc(CUDA_SRU_KERNEL, options, None)
-
+module = None
 def _cuda_get_module():
+	global module
+	if module is not None:
+		return module
+
 	module = function.Module()
 	
 	if cupy_version == 1:
@@ -226,7 +230,7 @@ def _as_contiguous(args):
 				continue
 			if arg.flags.c_contiguous is False:
 				arg = cupy.ascontiguousarray(arg)
-			ret.append(cupy.ascontiguousarray(arg))
+			ret.append(arg)
 		return ret
 
 	if args.flags.c_contiguous is False:
@@ -304,6 +308,7 @@ class SRUFunction(Function):
 	# x: (batchsize, feature_dimension, seq_length)
 	def forward_gpu(self, inputs):
 		X, W, B = _as_contiguous(inputs[:3])
+		
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 
@@ -335,7 +340,6 @@ class SRUFunction(Function):
 			grid=(num_block, 1, 1))
 
 		self.C = C
-		self.H = H
 		return H, C, C[..., -1]
 
 	def backward_cpu(self, inputs, grad_outputs):
@@ -347,20 +351,21 @@ class SRUFunction(Function):
 		batchsize, feature_dimension, seq_length = X.shape
 		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
+
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
 
 		U = xp.matmul(W, X)
 
-		grad_highway_x = xp.zeros_like(X)
-		grad_uz = xp.zeros_like(X)
+		grad_highway_x = xp.empty_like(X)
+		grad_uz = xp.empty_like(X)
 		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
-		grad_w = xp.zeros_like(W)
-		grad_initial_ct = xp.zeros_like(initial_ct)
+		grad_w = xp.empty_like(W)
+		grad_initial_ct = xp.empty_like(initial_ct)
 
-		incoming_grad_ct = xp.zeros_like(initial_ct) if grad_outputs[2] is None else _as_contiguous(grad_outputs[2])
-		incoming_grad_h = xp.zeros_like(self.H) if grad_outputs[0] is None else _as_contiguous(grad_outputs[0])
+		incoming_grad_ct = xp.empty_like(initial_ct) if grad_outputs[2] is None else _as_contiguous(grad_outputs[2])
+		incoming_grad_h = xp.empty_like(X) if grad_outputs[0] is None else _as_contiguous(grad_outputs[0])
 
 		_cuda_elementwise("backward", 
 			args=[

@@ -41,9 +41,9 @@ class RNN(chainer.Chain):
 		h0 = self.embed(x)
 		h0 = F.reshape(h0, (batchsize, seq_length, -1))
 		h0 = F.transpose(h0, (0, 2, 1))
-		h1, c1, self.lc1 = self.l1(F.dropout(h0, ratio=0.75), self.lc1)
-		h2, c2, self.lc2 = self.l2(F.dropout(h1, ratio=0.2), self.lc2)
-		out_data = self.l3(F.dropout(h2, 0.75))
+		h1, c1, self.lc1 = self.l1(F.dropout(h0), self.lc1)
+		h2, c2, self.lc2 = self.l2(F.dropout(h1), self.lc2)
+		out_data = self.l3(F.dropout(h2))
 		if flatten:
 			out_data = F.reshape(F.swapaxes(out_data, 1, 2), (-1, self.vocab_size))
 		return out_data
@@ -116,77 +116,66 @@ def main():
 
 		# training
 		for itr in range(total_iterations_train):
+			# sample minbatch
+			batch_offsets = np.random.randint(0, len(dataset_train) - args.seq_length - 1, size=args.batchsize)
+			x_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
+			t_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
+			for batch_index, offset in enumerate(batch_offsets):
+				sequence = dataset_train[offset:offset + args.seq_length]
+				teacher = dataset_train[offset + 1:offset + args.seq_length + 1]
+				x_batch[batch_index] = sequence
+				t_batch[batch_index] = teacher
 
-			try:
-				# sample minbatch
-				batch_offsets = np.random.randint(0, len(dataset_train) - args.seq_length - 1, size=args.batchsize)
-				x_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
-				t_batch = np.empty((args.batchsize, args.seq_length), dtype=np.int32)
-				for batch_index, offset in enumerate(batch_offsets):
-					sequence = dataset_train[offset:offset + args.seq_length]
-					teacher = dataset_train[offset + 1:offset + args.seq_length + 1]
-					x_batch[batch_index] = sequence
-					t_batch[batch_index] = teacher
+			if using_gpu:
+				x_batch = cuda.to_gpu(x_batch)
+				t_batch = cuda.to_gpu(t_batch)
 
-				if using_gpu:
-					x_batch = cuda.to_gpu(x_batch)
-					t_batch = cuda.to_gpu(t_batch)
+			t_batch = flatten(t_batch)
 
-				t_batch = flatten(t_batch)
+			# update model parameters
+			with chainer.using_config("train", True):
+				rnn.reset_state()
+				y_batch = rnn(x_batch, flatten=True)
+				loss = F.softmax_cross_entropy(y_batch, t_batch)
 
-				# update model parameters
-				with chainer.using_config("train", True):
-					rnn.reset_state()
-					y_batch = rnn(x_batch, flatten=True)
-					loss = F.softmax_cross_entropy(y_batch, t_batch)
+				rnn.cleargrads()
+				loss.backward()
+				optimizer.update()
 
-					rnn.cleargrads()
-					loss.backward()
-					optimizer.update()
+				sum_loss += float(loss.data)
 
-					sum_loss += float(loss.data)
-
-				printr("Training ... {:3.0f}% ({}/{})".format((itr + 1) / total_iterations_train * 100, itr + 1, total_iterations_train))
-
-			except Exception as e:
-				printr("")
-				print(str(e))
+			printr("Training ... {:3.0f}% ({}/{})".format((itr + 1) / total_iterations_train * 100, itr + 1, total_iterations_train))
 
 		save_model(rnn, "model.hdf5")
 
 		# evaluation
-		with chainer.no_backprop_mode() and chainer.using_config("train", False):
-			x_sequence = dataset_dev[:-1]
-			t_sequence = dataset_dev[1:]
-			rnn.reset_state()
-			total_iterations_dev = math.ceil(len(x_sequence) / args.seq_length)
-			offset = 0
-			negative_log_likelihood = 0
-			for itr in range(total_iterations_dev):
-				try:
-					seq_length = min(offset + args.seq_length, len(x_sequence)) - offset
-					x_batch = x_sequence[None, offset:offset + seq_length]
-					t_batch = flatten(t_sequence[None, offset:offset + seq_length])
+		x_sequence = dataset_dev[:-1]
+		t_sequence = dataset_dev[1:]
+		rnn.reset_state()
+		total_iterations_dev = math.ceil(len(x_sequence) / args.seq_length)
+		offset = 0
+		negative_log_likelihood = 0
+		for itr in range(total_iterations_dev):
+			seq_length = min(offset + args.seq_length, len(x_sequence)) - offset
+			x_batch = x_sequence[None, offset:offset + seq_length]
+			t_batch = flatten(t_sequence[None, offset:offset + seq_length])
 
-					if using_gpu:
-						x_batch = cuda.to_gpu(x_batch)
-						t_batch = cuda.to_gpu(t_batch)
+			if using_gpu:
+				x_batch = cuda.to_gpu(x_batch)
+				t_batch = cuda.to_gpu(t_batch)
 
-					y_batch = rnn(x_batch, flatten=True)
-					negative_log_likelihood += float(xp.sum(F.softmax_cross_entropy(y_batch, t_batch, reduce="no").data))
+			with chainer.no_backprop_mode() and chainer.using_config("train", False):
+				y_batch = rnn(x_batch, flatten=True)
+				negative_log_likelihood += float(F.softmax_cross_entropy(y_batch, t_batch).data) * seq_length
 
-					printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
-					offset += seq_length
+			printr("Computing perplexity ...{:3.0f}% ({}/{})".format((itr + 1) / total_iterations_dev * 100, itr + 1, total_iterations_dev))
+			offset += seq_length
 
-				except Exception as e:
-					printr("")
-					print(str(e))
-
-			perplexity = math.exp(negative_log_likelihood / len(dataset_dev))
+		perplexity = math.exp(negative_log_likelihood / len(dataset_dev))
 			
 		clear_console()
-		print("Epoch {} done in {} min - loss: {:.6f} - log_likelihood: {} - ppl: {} - lr: {:.3f} - total {} min".format(
-			epoch + 1, int((time.time() - epoch_start_time) // 60), sum_loss / total_iterations_train, 
+		print("Epoch {} done in {} sec - loss: {:.6f} - log_likelihood: {} - ppl: {} - lr: {:.3f} - total {} min".format(
+			epoch + 1, int(time.time() - epoch_start_time), sum_loss / total_iterations_train, 
 			int(-negative_log_likelihood), int(perplexity), get_current_learning_rate(optimizer),
 			int((time.time() - training_start_time) // 60)))
 
