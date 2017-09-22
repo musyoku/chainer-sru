@@ -80,8 +80,10 @@ extern "C"
 				  const float* __restrict__ initial_cell_ptr, 
 				  const float* __restrict__ incoming_grad_h_ptr,
 				  const float* __restrict__ incoming_grad_ct_ptr,
+				  const float* __restrict__ w_ptr,
+				  float* __restrict__ grad_x_ptr, 
 				  float* __restrict__ grad_highway_x_ptr, 
-				  float* __restrict__ grad_uz_ptr, 
+				  float* __restrict__ grad_u_ptr, 
 				  float* __restrict__ grad_w_ptr,
 				  float* __restrict__ grad_bias_ptr, 
 				  float* __restrict__ grad_init_ct_ptr,
@@ -114,10 +116,16 @@ extern "C"
 		const float initial_cell = *(initial_ct_ptr);	// initialize c_t
 
 		// gradient
+		//// B
 		float* grad_bft_ptr = grad_bias_ptr + (feature_index + (batch_index * 2)     * feature_dimension) * seq_length;
 		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
+		//// X
 		float* grad_highway_xt_ptr = grad_highway_x_ptr + column * seq_length;
-		float* grad_uzt_ptr = grad_uz_ptr + column * seq_length;
+		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
+		//// U
+		float* grad_uzt_ptr = grad_u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		float* grad_uft_ptr = grad_u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		float* grad_urt_ptr = grad_u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
 		// move to time T
 		xt_ptr  += seq_length - 1;
@@ -158,8 +166,10 @@ extern "C"
 			//// x_t (highway connection)
 			*grad_highway_xt_ptr = incoming_grad_ht * (1.0f - rt);
 
-			//// z_t (:= Wx_t)
+			//// U_t
 			*grad_uzt_ptr = (incoming_grad_ht * rt * grad_tanh + incoming_grad_ct) * (1.0f - ft);
+			*grad_uft_ptr = *grad_bft_ptr;
+			*grad_urt_ptr = *grad_brt_ptr;
 
 			//// c_{t-1}
 			incoming_grad_ct = (grad_ct + incoming_grad_ct) * ft;
@@ -173,10 +183,52 @@ extern "C"
 			incoming_grad_ht_ptr -= 1;
 			grad_highway_xt_ptr -= 1;
 			grad_uzt_ptr -= 1;
+			grad_uft_ptr -= 1;
+			grad_urt_ptr -= 1;
 			grad_brt_ptr -= 1;
 			grad_bft_ptr -= 1;
 		}
 		*(grad_init_ct_ptr + column) = incoming_grad_ct;
+	}
+
+	__global__ 
+	void backward_broadcast(
+			float* __restrict__ grad_x_ptr, 
+			float* __restrict__ grad_highway_x_ptr, 
+			float* __restrict__ grad_u_ptr, 
+			float* __restrict__ grad_w_ptr,
+			float* __restrict__ grad_bias_ptr, 
+			float* __restrict__ grad_init_ct_ptr,
+			const int batchsize, 
+			const int feature_dimension, 
+			const int seq_length)
+	{
+		int identifier = blockIdx.x * blockDim.x + threadIdx.x;				// 0 <= identifier < batchsize * feature_dimension * seq_length
+		int total_threads = batchsize * feature_dimension * seq_length;
+		if(identifier >= total_threads) return;
+
+		int t = identifier % seq_length;
+		int batch_index = identifier / (feature_dimension * seq_length);	// 0 <= batch_index < batchsize
+		int feature_index = (identifier / seq_length) % feature_dimension;					// 0 <= feature_index < feature_dimension
+
+		*(grad_x_ptr + identifier) = feature_index;
+		return;
+
+		/*
+		// xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
+		*grad_xt_ptr = 0;
+		for(int d = 0;d < feature_dimension * 3;d++)
+		{
+			float* gptr = grad_u_ptr + (d + (batch_index * 3) * feature_dimension) * seq_length + t;
+			*grad_xt_ptr += *(w_ptr + d * feature_dimension + feature_index) * *gptr;
+		}
+		// highway connection
+		*grad_xt_ptr += *grad_highway_xt_ptr;
+
+		// move to the next time
+		grad_xt_ptr += 1;
+		grad_highway_xt_ptr += 1;
+		*/
 	}
 }
 """
@@ -192,27 +244,8 @@ elif hasattr(compiler, "nvcc"):					# CuPy v1
 	cupy_version = 1
 else:
 	raise NotImplementedError()
-ptx = nvcc(CUDA_SRU_KERNEL, options, None)
 
-def _cuda_get_module():
-	module = function.Module()
-	
-	if cupy_version == 1:
-		module.load(ptx)
-		return module
-
-	if cupy_version == 2:
-		ls = function.LinkState()
-		ls.add_ptr_data(ptx, u"cupy.ptx")
-		module.load(ls.complete())
-		return module
-
-	raise NotImplementedError()
-
-def _cuda_elementwise(name, args, block, grid):
-	module = _cuda_get_module()
-	func = module.get_function(name)
-	func(args=args, block=block, grid=grid)
+CUDA_SRU_PTX = nvcc(CUDA_SRU_KERNEL, options, None)
 
 def _np_sigmoid(x):
 	return 1 / (1 + np.exp(-x))
@@ -226,7 +259,7 @@ def _as_contiguous(args):
 				continue
 			if arg.flags.c_contiguous is False:
 				arg = cupy.ascontiguousarray(arg)
-			ret.append(cupy.ascontiguousarray(arg))
+			ret.append(arg)
 		return ret
 
 	if args.flags.c_contiguous is False:
@@ -236,8 +269,33 @@ def _as_contiguous(args):
 
 class SRUFunction(Function):
 
+	_cuda_module = None
+
 	def __init__(self, use_tanh):
 		self.use_tanh = use_tanh
+
+	def _cuda_elementwise(self, name, args, block, grid):
+		module = self._cuda_get_module()
+		func = module.get_function(name)
+		func(args=args, block=block, grid=grid)
+
+	def _cuda_get_module(self):
+		if self._cuda_module is not None:
+			return self._cuda_module
+
+		self._cuda_module = function.Module()
+		
+		if cupy_version == 1:
+			self._cuda_module.load(CUDA_SRU_PTX)
+			return self._cuda_module
+
+		if cupy_version == 2:
+			ls = function.LinkState()
+			ls.add_ptr_data(CUDA_SRU_PTX, u"cupy.ptx")
+			self._cuda_module.load(ls.complete())
+			return self._cuda_module
+
+		raise NotImplementedError()
 
 	def check_type_forward(self, in_types):
 		n_in = in_types.size()
@@ -304,18 +362,13 @@ class SRUFunction(Function):
 	# x: (batchsize, feature_dimension, seq_length)
 	def forward_gpu(self, inputs):
 		X, W, B = _as_contiguous(inputs[:3])
+		
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 
 		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
 		U = xp.matmul(W, X)
-		# print(U.shape)
-		# print(U)
-		# initial_ct += xp.random.uniform(size=(batchsize, feature_dimension))
-		# initial_ct = X[..., 0]
-		# print(initial_ct.data.ptr)
-		# print(initial_ct)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
@@ -323,9 +376,8 @@ class SRUFunction(Function):
 
 		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
 		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
-		# print(X.shape)
-		# print(U.shape)
-		_cuda_elementwise("forward", 
+		
+		self._cuda_elementwise("forward", 
 			args=[
 				X.data.ptr,
 				U.data.ptr,
@@ -341,12 +393,8 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		# import numpy
-		# numpy.set_printoptions(suppress=True)
-		# print(initial_ct)
-		# print(cuda.to_cpu(H).astype(numpy.float32))
+		self.U = U
 		self.C = C
-		self.H = H
 		return H, C, C[..., -1]
 
 	def backward_cpu(self, inputs, grad_outputs):
@@ -358,47 +406,35 @@ class SRUFunction(Function):
 		batchsize, feature_dimension, seq_length = X.shape
 		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
 
+
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
 
-		U = xp.matmul(W, X)
-
+		grad_x = xp.zeros_like(X)
 		grad_highway_x = xp.zeros_like(X)
-		grad_uz = xp.zeros_like(X)
-		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
+		grad_b = xp.zeros((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
 		grad_w = xp.zeros_like(W)
+		grad_u = xp.zeros((batchsize, feature_dimension * 3, seq_length), dtype=self.U.dtype)
 		grad_initial_ct = xp.zeros_like(initial_ct)
 
+		# initialize with zero
 		incoming_grad_ct = xp.zeros_like(initial_ct) if grad_outputs[2] is None else _as_contiguous(grad_outputs[2])
-		incoming_grad_h = xp.zeros_like(self.H) if grad_outputs[0] is None else _as_contiguous(grad_outputs[0])
-		# print(incoming_grad_h.flags)
-		# print(incoming_grad_h.flags)
+		incoming_grad_h = xp.zeros_like(X) if grad_outputs[0] is None else _as_contiguous(grad_outputs[0])
 
-
-		# print(X.flags)
-		# print(U.flags)
-		# print(B.flags)
-		# print(self.C.flags)
-		# print(initial_ct.flags)
-		# print(incoming_grad_h.flags)
-		# print(incoming_grad_ct.flags)
-		# print(grad_highway_x.flags)
-		# print(grad_w.flags)
-		# print(grad_b.flags)
-		# print(grad_initial_ct.flags)
-
-		_cuda_elementwise("backward", 
+		self._cuda_elementwise("backward", 
 			args=[
 				X.data.ptr,
-				U.data.ptr,
+				self.U.data.ptr,
 				B.data.ptr,
 				self.C.data.ptr,
 				initial_ct.data.ptr,
 				incoming_grad_h.data.ptr,
 				incoming_grad_ct.data.ptr,
+				W.data.ptr,
+				grad_x.data.ptr,
 				grad_highway_x.data.ptr,
-				grad_uz.data.ptr,
+				grad_u.data.ptr,
 				grad_w.data.ptr,
 				grad_b.data.ptr,
 				grad_initial_ct.data.ptr,
@@ -409,56 +445,52 @@ class SRUFunction(Function):
 			], 
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
-		# cuda.cupy.ElementwiseKernel(
-		# 	'float32 x',
-		# 	'float32 h',
-		# 	'''
-		# 	h = i;
-		# 	''',
-		# 	'reduce_probability')(grad_x, grad_h)
 
-		# print("ElementwiseKernel")
-		# print(grad_h)
+		# grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
+		# grad_u = xp.concatenate((grad_u[:, :feature_dimension, :], grad_b), axis=1)
+
+		# import numpy
+		# numpy.set_printoptions(suppress=True)
 		# print(grad_x)
+		# print(W)
+		# print(xp.sum(W, axis=0))
+		# print(xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x)
+		# raise Exception()
+		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
-		# _cuda_elementwise("backward_test", 
-		# 	args=[
-		# 		grad_h.data.ptr,
-		# 		grad_x.data.ptr,
-		# 		batchsize,
-		# 		feature_dimension,
-		# 		seq_length,
-		# 		self.use_tanh
-		# 	], 
-		# 	block=(thread_per_block, 1, 1), 
-		# 	grid=(num_block, 1, 1))
 
-		grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
-		# grad_u = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
+		total_columns = feature_dimension * batchsize * seq_length
+		thread_per_block = min(512, total_columns)
+		num_block = total_columns // thread_per_block + 1
+
+		self._cuda_elementwise("backward_broadcast", 
+			args=[
+				grad_x.data.ptr,
+				grad_highway_x.data.ptr,
+				grad_u.data.ptr,
+				grad_w.data.ptr,
+				grad_b.data.ptr,
+				grad_initial_ct.data.ptr,
+				batchsize,
+				feature_dimension,
+				seq_length
+			], 
+			block=(thread_per_block, 1, 1), 
+			grid=(num_block, 1, 1))
+
+		print(grad_x)
+		raise Exception()
+
+		if len(inputs) == 4:
+			return grad_x, W, B, initial_ct
+		return grad_x, W, B
 
 		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
-		# grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize, feature_dimension * 3, feature_dimension, seq_length))
 		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
-		# print(grad_w.shape)
-		# print(X.shape)
-		# print(W.shape)
 		grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
-		# print(grad_w)
 
-		# print("_cuda_elementwise")
-		# np.set_printoptions(suppress=True)
-		# print("grad_x")
-		# print(grad_x)
-		# print("grad_highway_x")
-		# print(grad_highway_x)
 		grad_b = xp.sum(grad_b, axis=(0, 2))
-		# print("grad_b")
-		# print(grad_b)
-		# print("grad_initial_ct")
-		# print(grad_initial_ct)
-		# print("incoming_grad_ct")
-		# print(incoming_grad_ct)
 
 		if len(inputs) == 4:
 			return grad_x, grad_w, grad_b, grad_initial_ct

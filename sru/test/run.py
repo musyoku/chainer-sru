@@ -146,7 +146,6 @@ def check_matmul_grad():
 	print(X.grad)
 	print(xp.sum(W.data, axis=0))
 
-@profile
 def check_forward(batchsize, feature_dimension, seq_length, use_tanh):
 	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 20
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
@@ -169,7 +168,6 @@ def check_forward(batchsize, feature_dimension, seq_length, use_tanh):
 	assert(xp.mean(abs(cell_true.data - cuda.to_cpu(cell.data))) <= threshold), xp.mean(abs(cell_true.data - cuda.to_cpu(cell.data)))
 	assert(xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data))) <= threshold), xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data)))
 
-@profile
 def check_backward(batchsize, feature_dimension, seq_length, use_tanh):
 	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 5
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
@@ -245,4 +243,5 @@ def run_tests():
 	
 
 if __name__ == "__main__":
+	check_backward(3, 4, 5, True)
 	run_tests()
