@@ -269,20 +269,20 @@ class SRUFunction(Function):
 		func(args=args, block=block, grid=grid)
 
 	def _cuda_get_module(self):
-		if self._cuda_module is not None:
-			return self._cuda_module
+		if SRUFunction._cuda_module is not None:
+			return SRUFunction._cuda_module
 
-		self._cuda_module = function.Module()
+		SRUFunction._cuda_module = function.Module()
 		
 		if cupy_version == 1:
-			self._cuda_module.load(CUDA_SRU_PTX)
-			return self._cuda_module
+			SRUFunction._cuda_module.load(CUDA_SRU_PTX)
+			return SRUFunction._cuda_module
 
 		if cupy_version == 2:
 			ls = function.LinkState()
 			ls.add_ptr_data(CUDA_SRU_PTX, u"cupy.ptx")
-			self._cuda_module.load(ls.complete())
-			return self._cuda_module
+			SRUFunction._cuda_module.load(ls.complete())
+			return SRUFunction._cuda_module
 
 		raise NotImplementedError()
 

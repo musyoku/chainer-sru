@@ -8,7 +8,7 @@
 - [x] CUDA optimized backward computation
 - [x] Testing
 - [x] Training language models
-- [ ] Benchmark
+- [x] Benchmark
 
 ## Requirements
 
@@ -16,4 +16,15 @@
 - CuPy
 - Python 2 or 3
 
+## Language Modeling
 
+| Model | #layers | d   | Perplexity |
+|-------|---------|-----|------------|
+| LSTM  | 2       | 320 | 93         |
+| SRU   | 2       | 320 | 95         |
+| LSTM  | 2       | 128 | 117        |
+| SRU   | 2       | 128 | 118        |
+
+## Benchmark
+
+![result]()
