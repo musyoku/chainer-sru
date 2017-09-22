@@ -2,7 +2,7 @@
 
 - [Training RNNs as Fast as CNNs](https://arxiv.org/abs/1709.02755)
 
-#### ToDo
+#### Todo
 
 - [x] CUDA optimized forward computation
 - [x] CUDA optimized backward computation
