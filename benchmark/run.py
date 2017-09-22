@@ -87,35 +87,36 @@ def generate_cmap(colors):
 def plot(df, title):
 	sns.set(font_scale=1.5)
 	sns.set_style("whitegrid", {"grid.linestyle": "--"})
-	df = pd.DataFrame({
-		"LSTM": [100, 500],
-		"SRU": [100, 500],
-		})
-
 	df.index = ["forward","backward"]
 	df = df.T
 	plt.clf()
 	ax = df.plot.barh(stacked=True, cmap=generate_cmap(["#597DBE", "#A0C7F1"]), width=0.2, figsize=(8, 4))
-	ax.set_title("l=32, d=256")
+	ax.set_title(title)
 	ax.set(xlabel="[ms]")
 	plt.tight_layout()
-	plt.savefig("benchmark.png")
-
+	plt.savefig("{}.png".format(title))
 	
 def main():
 	batchsize_list = [16, 32, 64]
-	seq_length_list = [32, 64]
+	seq_length_list = [16, 32, 64]
 	feature_dimension_list = [128, 256, 512]
-	result_sru = []
-	result_lstm = []
+
 	for batchsize in batchsize_list:
 		for seq_length in seq_length_list:
 			for feature_dimension in feature_dimension_list:
-				result_sru += benchmark_sru(batchsize, seq_length, feature_dimension)
-				result_lstm += benchmark_lstm(batchsize, seq_length, feature_dimension)
+				result_sru = benchmark_sru(batchsize, seq_length, feature_dimension)
+				result_lstm = benchmark_lstm(batchsize, seq_length, feature_dimension)
 
-	for sru, lstm in zip(result_sru, result_lstm):
-		print(sru, lstm)
+				batchsize, seq_length, dimension, forward_sru, backward_sru = sru
+				batchsize, seq_length, dimension, forward_lstm, backward_lstm = lstm
+
+				df = pd.DataFrame({
+					"LSTM": [forward_lstm * 1000, backward_lstm * 1000],
+					"SRU": [forward_sru * 1000, backward_sru * 1000],
+					})
+
+				title = "l={}, d={}, batchsize={}".format(seq_length, dimension, batchsize)
+				plot(df, title)
 
 if __name__ == '__main__':
 	main()
