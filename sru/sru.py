@@ -192,31 +192,8 @@ elif hasattr(compiler, "nvcc"):					# CuPy v1
 	cupy_version = 1
 else:
 	raise NotImplementedError()
-ptx = nvcc(CUDA_SRU_KERNEL, options, None)
-module = None
-def _cuda_get_module():
-	global module
-	if module is not None:
-		return module
 
-	module = function.Module()
-	
-	if cupy_version == 1:
-		module.load(ptx)
-		return module
-
-	if cupy_version == 2:
-		ls = function.LinkState()
-		ls.add_ptr_data(ptx, u"cupy.ptx")
-		module.load(ls.complete())
-		return module
-
-	raise NotImplementedError()
-
-def _cuda_elementwise(name, args, block, grid):
-	module = _cuda_get_module()
-	func = module.get_function(name)
-	func(args=args, block=block, grid=grid)
+CUDA_SRU_PTX = nvcc(CUDA_SRU_KERNEL, options, None)
 
 def _np_sigmoid(x):
 	return 1 / (1 + np.exp(-x))
@@ -240,8 +217,33 @@ def _as_contiguous(args):
 
 class SRUFunction(Function):
 
+	_cuda_module = None
+
 	def __init__(self, use_tanh):
 		self.use_tanh = use_tanh
+
+	def _cuda_elementwise(self, name, args, block, grid):
+		module = self._cuda_get_module()
+		func = module.get_function(name)
+		func(args=args, block=block, grid=grid)
+
+	def _cuda_get_module(self):
+		if self._cuda_module is not None:
+			return self._cuda_module
+
+		self._cuda_module = function.Module()
+		
+		if cupy_version == 1:
+			self._cuda_module.load(CUDA_SRU_PTX)
+			return self._cuda_module
+
+		if cupy_version == 2:
+			ls = function.LinkState()
+			ls.add_ptr_data(CUDA_SRU_PTX, u"cupy.ptx")
+			self._cuda_module.load(ls.complete())
+			return self._cuda_module
+
+		raise NotImplementedError()
 
 	def check_type_forward(self, in_types):
 		n_in = in_types.size()
@@ -323,7 +325,7 @@ class SRUFunction(Function):
 		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
 		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
 		
-		_cuda_elementwise("forward", 
+		self._cuda_elementwise("forward", 
 			args=[
 				X.data.ptr,
 				U.data.ptr,
@@ -367,7 +369,7 @@ class SRUFunction(Function):
 		incoming_grad_ct = xp.empty_like(initial_ct) if grad_outputs[2] is None else _as_contiguous(grad_outputs[2])
 		incoming_grad_h = xp.empty_like(X) if grad_outputs[0] is None else _as_contiguous(grad_outputs[0])
 
-		_cuda_elementwise("backward", 
+		self._cuda_elementwise("backward", 
 			args=[
 				X.data.ptr,
 				U.data.ptr,

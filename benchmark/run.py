@@ -1,6 +1,6 @@
 from __future__ import division
 from __future__ import print_function
-import sys, os, chainer, time, argparse, pylab
+import sys, os, chainer, time, argparse
 import seaborn as sns
 import numpy as np
 import pandas as pd
@@ -83,8 +83,8 @@ def generate_cmap(colors):
 	for v, c in zip(values, colors):
 		color_list.append( ( v/ vmax, c) )
 	return LinearSegmentedColormap.from_list('custom_cmap', color_list)
-	
-def main():
+
+def plot(df, title):
 	sns.set(font_scale=1.5)
 	sns.set_style("whitegrid", {"grid.linestyle": "--"})
 	df = pd.DataFrame({
@@ -94,19 +94,15 @@ def main():
 
 	df.index = ["forward","backward"]
 	df = df.T
-	print(df)
-
-	pylab.clf()
+	plt.clf()
 	ax = df.plot.barh(stacked=True, cmap=generate_cmap(["#597DBE", "#A0C7F1"]), width=0.2, figsize=(8, 4))
 	ax.set_title("l=32, d=256")
 	ax.set(xlabel="[ms]")
-	fig = ax.get_figure()
-	fig.tight_layout()
-	fig.savefig("benchmark.png")
+	plt.tight_layout()
+	plt.savefig("benchmark.png")
 
-	raise Exception()
-
-
+	
+def main():
 	batchsize_list = [16, 32, 64]
 	seq_length_list = [32, 64]
 	feature_dimension_list = [128, 256, 512]

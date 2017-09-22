@@ -1,5 +1,24 @@
 from chainer import optimizers
 
+class Optimizer():
+	def __init__(self, name, lr, momentum):
+		self.optimizer = get_optimizer(name, lr, momentum)
+
+	def setup(self, model):
+		self.optimizer.setup(model)
+
+	def get_learning_rate(self):
+		return get_current_learning_rate(self.optimizer)
+
+	def decrease_learning_rate(self, factor, final_value):
+		decrease_learning_rate(self.optimizer, factor, final_value)
+
+	def add_hook(self, hook):		
+		self.optimizer.add_hook(hook)
+
+	def update(self):
+		self.optimizer.update()
+
 def get_current_learning_rate(opt):
 	if isinstance(opt, optimizers.NesterovAG):
 		return opt.lr

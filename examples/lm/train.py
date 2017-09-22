@@ -8,22 +8,22 @@ import chainer.links as L
 from chainer import cuda, serializers
 sys.path.append(os.path.join("..", ".."))
 from sru import SRU
-from optim import get_optimizer, decrease_learning_rate, get_current_learning_rate
+from optim import Optimizer
 
 def Convolution1D(in_channels, out_channels):
 	return L.ConvolutionND(1, in_channels, out_channels, 1, stride=1, pad=0, nobias=False)
 
 class RNN(chainer.Chain):
-	def __init__(self, vocab_size, num_hidden_units):
+	def __init__(self, vocab_size, ndim_feature):
 		super(RNN, self).__init__()
 		self.vocab_size = vocab_size
-		self.num_hidden_units = num_hidden_units
+		self.ndim_feature = ndim_feature
 
 		with self.init_scope():
-			self.embed = L.EmbedID(vocab_size, num_hidden_units)
-			self.l1 = SRU(num_hidden_units, num_hidden_units)
-			self.l2 = SRU(num_hidden_units, num_hidden_units)
-			self.l3 = Convolution1D(num_hidden_units, vocab_size)
+			self.embed = L.EmbedID(vocab_size, ndim_feature)
+			self.l1 = SRU(ndim_feature, ndim_feature)
+			self.l2 = SRU(ndim_feature, ndim_feature)
+			self.l3 = Convolution1D(ndim_feature, vocab_size)
 
 		for param in self.params():
 			param.data[...] = np.random.uniform(-0.1, 0.1, param.data.shape)
@@ -77,30 +77,34 @@ def load_model(model, filename):
 
 def main():
 	parser = argparse.ArgumentParser()
-	parser.add_argument("--batchsize", "-b", type=int, default=64, help="Number of examples in each mini-batch")
-	parser.add_argument("--seq-length", "-l", type=int, default=35, help="Number of words in each mini-batch")
-	parser.add_argument("--total-epochs", "-e", type=int, default=39, help="Number of sweeps over the dataset to train")
-	parser.add_argument("--gpu-device", "-g", type=int, default=0, help="GPU ID (negative value indicates CPU)")
-	parser.add_argument("--grad-clip", "-gc", type=float, default=5, help="Gradient norm threshold to clip")
-	parser.add_argument("--learning-rate", "-lr", type=float, default=0.001, help="Gradient norm threshold to clip")
-	parser.add_argument("--momentum", "-mo", type=float, default=0.9, help="Gradient norm threshold to clip")
+	parser.add_argument("--batchsize", "-b", type=int, default=64)
+	parser.add_argument("--seq-length", "-l", type=int, default=35)
+	parser.add_argument("--total-epochs", "-e", type=int, default=300)
+	parser.add_argument("--gpu-device", "-g", type=int, default=0)
+	parser.add_argument("--grad-clip", "-gc", type=float, default=5)
+	parser.add_argument("--learning-rate", "-lr", type=float, default=1)
+	parser.add_argument("--weight-decay", "-wd", type=float, default=0)
+	parser.add_argument("--momentum", "-mo", type=float, default=0.9)
 	parser.add_argument("--optimizer", "-opt", type=str, default="msgd")
-	parser.add_argument("--hidden-units", "-hu", type=int, default=650, help="Number of SRU units in each layer")
-	parser.add_argument("--lr-decreasing-start-epoch", "-lrd", type=int, default=175)
+	parser.add_argument("--ndim-feature", "-nf", type=int, default=650)
+	parser.add_argument("--lr-decay-epoch", "-lrd", type=int, default=20)
 	args = parser.parse_args()
 
 	dataset_train, dataset_dev, dataset_test = chainer.datasets.get_ptb_words()
 	dataset_dev = np.asarray(dataset_dev, dtype=np.int32)
 
 	vocab_size = max(dataset_train) + 1
-	rnn = RNN(vocab_size, args.hidden_units)
+	rnn = RNN(vocab_size, args.ndim_feature)
 	load_model(rnn, "model.hdf5")
 
 	total_iterations_train = len(dataset_train) // (args.seq_length * args.batchsize)
 
-	optimizer = get_optimizer(args.optimizer, args.learning_rate, args.momentum)
+	optimizer = Optimizer(args.optimizer, args.learning_rate, args.momentum)
 	optimizer.setup(rnn)
-	optimizer.add_hook(chainer.optimizer.GradientClipping(args.grad_clip))
+	if args.grad_clip > 0:
+		optimizer.add_hook(chainer.optimizer.GradientClipping(args.grad_clip))
+	if args.weight_decay > 0:
+		optimizer.add_hook(chainer.optimizer.WeightDecay(args.weight_decay))
 
 	using_gpu = False
 	if args.gpu_device >= 0:
@@ -179,11 +183,11 @@ def main():
 		clear_console()
 		print("Epoch {} done in {} sec - loss: {:.6f} - log_likelihood: {} - ppl: {} - lr: {:.3g} - total {} min".format(
 			epoch + 1, int(time.time() - epoch_start_time), sum_loss / total_iterations_train, 
-			int(-negative_log_likelihood), int(perplexity), get_current_learning_rate(optimizer),
+			int(-negative_log_likelihood), int(perplexity), optimizer.get_learning_rate(),
 			int((time.time() - training_start_time) // 60)))
 
-		if epoch >= args.lr_decreasing_start_epoch:
-			decrease_learning_rate(optimizer, 0.98, 1e-7)
+		if epoch >= args.lr_decay_epoch:
+			optimizer.decrease_learning_rate(0.98, final_value=1e-5)
 
 if __name__ == "__main__":
 	main()
