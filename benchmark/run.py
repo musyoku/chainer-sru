@@ -91,9 +91,9 @@ def plot(df, title):
 	plt.savefig("{}.png".format(title))
 	
 def main():
-	batchsize_list = [16, 32, 64]
-	seq_length_list = [16, 32, 64]
-	feature_dimension_list = [128, 256, 512]
+	batchsize_list = [16, 32]
+	seq_length_list = [16, 32]
+	feature_dimension_list = [128, 256, 512, 1024]
 
 	for batchsize in batchsize_list:
 		for seq_length in seq_length_list:

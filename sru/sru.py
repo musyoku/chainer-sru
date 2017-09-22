@@ -81,10 +81,8 @@ extern "C"
 				  const float* __restrict__ incoming_grad_h_ptr,
 				  const float* __restrict__ incoming_grad_ct_ptr,
 				  const float* __restrict__ w_ptr,
-				  float* __restrict__ grad_x_ptr, 
 				  float* __restrict__ grad_highway_x_ptr, 
 				  float* __restrict__ grad_u_ptr, 
-				  float* __restrict__ grad_w_ptr,
 				  float* __restrict__ grad_bias_ptr, 
 				  float* __restrict__ grad_init_ct_ptr,
 				  const int batchsize, 
@@ -121,7 +119,6 @@ extern "C"
 		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
 		//// X
 		float* grad_highway_xt_ptr = grad_highway_x_ptr + column * seq_length;
-		float* grad_xt_ptr = grad_x_ptr + column * seq_length;
 		//// U
 		float* grad_uzt_ptr = grad_u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
 		float* grad_uft_ptr = grad_u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
@@ -192,13 +189,11 @@ extern "C"
 	}
 
 	__global__ 
-	void backward_broadcast(
+	void backward_grad_x(
+			const float* __restrict__ w_ptr, 
 			float* __restrict__ grad_x_ptr, 
-			float* __restrict__ grad_highway_x_ptr, 
-			float* __restrict__ grad_u_ptr, 
-			float* __restrict__ grad_w_ptr,
-			float* __restrict__ grad_bias_ptr, 
-			float* __restrict__ grad_init_ct_ptr,
+			const float* __restrict__ grad_highway_x_ptr, 
+			const float* __restrict__ grad_u_ptr, 
 			const int batchsize, 
 			const int feature_dimension, 
 			const int seq_length)
@@ -211,24 +206,35 @@ extern "C"
 		int batch_index = identifier / (feature_dimension * seq_length);	// 0 <= batch_index < batchsize
 		int feature_index = (identifier / seq_length) % feature_dimension;					// 0 <= feature_index < feature_dimension
 
-		*(grad_x_ptr + identifier) = feature_index;
-		return;
-
-		/*
 		// xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
+		float* grad_xt_ptr = grad_x_ptr + identifier;
 		*grad_xt_ptr = 0;
 		for(int d = 0;d < feature_dimension * 3;d++)
 		{
-			float* gptr = grad_u_ptr + (d + (batch_index * 3) * feature_dimension) * seq_length + t;
+			const float* gptr = grad_u_ptr + (d + (batch_index * 3) * feature_dimension) * seq_length + t;
 			*grad_xt_ptr += *(w_ptr + d * feature_dimension + feature_index) * *gptr;
 		}
 		// highway connection
-		*grad_xt_ptr += *grad_highway_xt_ptr;
+		*grad_xt_ptr += *(grad_highway_x_ptr + identifier);
+	}
 
-		// move to the next time
-		grad_xt_ptr += 1;
-		grad_highway_xt_ptr += 1;
-		*/
+	__global__ 
+	void backward_grad_w(
+			const float* __restrict__ grad_x_ptr, 
+			const float* __restrict__ grad_u_ptr, 
+			float* __restrict__ grad_w_ptr, 
+			const int batchsize, 
+			const int feature_dimension, 
+			const int seq_length)
+	{
+		int identifier = blockIdx.x * blockDim.x + threadIdx.x;				// 0 <= identifier < batchsize * feature_dimension * seq_length
+		int total_threads = feature_dimension * feature_dimension * 3;
+		if(identifier >= total_threads) return;
+
+		int batch_index = identifier / (feature_dimension * seq_length);	// 0 <= batch_index < batchsize
+		int feature_index = (identifier / seq_length) % feature_dimension;					// 0 <= feature_index < feature_dimension
+
+		*grad_w_ptr = feature_index;
 	}
 }
 """
@@ -414,7 +420,7 @@ class SRUFunction(Function):
 		grad_x = xp.zeros_like(X)
 		grad_highway_x = xp.zeros_like(X)
 		grad_b = xp.zeros((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
-		grad_w = xp.zeros_like(W)
+		grad_w = xp.zeros((batchsize,) + W.shape + (seq_length,), dtype=W.dtype)
 		grad_u = xp.zeros((batchsize, feature_dimension * 3, seq_length), dtype=self.U.dtype)
 		grad_initial_ct = xp.zeros_like(initial_ct)
 
@@ -432,10 +438,8 @@ class SRUFunction(Function):
 				incoming_grad_h.data.ptr,
 				incoming_grad_ct.data.ptr,
 				W.data.ptr,
-				grad_x.data.ptr,
 				grad_highway_x.data.ptr,
 				grad_u.data.ptr,
-				grad_w.data.ptr,
 				grad_b.data.ptr,
 				grad_initial_ct.data.ptr,
 				batchsize,
@@ -449,28 +453,22 @@ class SRUFunction(Function):
 		# grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
 		# grad_u = xp.concatenate((grad_u[:, :feature_dimension, :], grad_b), axis=1)
 
-		# import numpy
-		# numpy.set_printoptions(suppress=True)
 		# print(grad_x)
 		# print(W)
 		# print(xp.sum(W, axis=0))
 		# print(xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x)
 		# raise Exception()
-		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
+		total_threads = feature_dimension * batchsize * seq_length
+		thread_per_block = min(512, total_threads)
+		num_block = total_threads // thread_per_block + 1
 
-		total_columns = feature_dimension * batchsize * seq_length
-		thread_per_block = min(512, total_columns)
-		num_block = total_columns // thread_per_block + 1
-
-		self._cuda_elementwise("backward_broadcast", 
+		self._cuda_elementwise("backward_grad_x", 
 			args=[
+				W.data.ptr,
 				grad_x.data.ptr,
 				grad_highway_x.data.ptr,
 				grad_u.data.ptr,
-				grad_w.data.ptr,
-				grad_b.data.ptr,
-				grad_initial_ct.data.ptr,
 				batchsize,
 				feature_dimension,
 				seq_length
@@ -478,19 +476,45 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		print(grad_x)
-		raise Exception()
+		# import numpy
+		# numpy.set_printoptions(suppress=True)
+		# _grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
+		# print(xp.mean(abs(grad_x - _grad_x)))
+		# # print(grad_x)
+		# print(grad_b)
+		grad_b = xp.sum(grad_b, axis=(0, 2))
+		# print(grad_b)
 
 		if len(inputs) == 4:
-			return grad_x, W, B, initial_ct
-		return grad_x, W, B
+			return grad_x, W, grad_b, grad_initial_ct
+		return grad_x, W, grad_b
+		
+		total_threads = feature_dimension ** 2 * 3 * batchsize
+		thread_per_block = min(512, total_threads)
+		num_block = total_threads // thread_per_block + 1
 
-		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
+		self._cuda_elementwise("backward_grad_w", 
+			args=[
+				grad_x.data.ptr,
+				grad_u.data.ptr,
+				grad_w.data.ptr,
+				batchsize,
+				feature_dimension,
+				seq_length
+			], 
+			block=(thread_per_block, 1, 1), 
+			grid=(num_block, 1, 1))
+
+
+		if len(inputs) == 4:
+			return grad_x, W, grad_b, grad_initial_ct
+		return grad_x, W, grad_b
+
+		# raise Exception()
 
 		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
 		grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
 
-		grad_b = xp.sum(grad_b, axis=(0, 2))
 
 		if len(inputs) == 4:
 			return grad_x, grad_w, grad_b, grad_initial_ct
