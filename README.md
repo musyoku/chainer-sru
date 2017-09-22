@@ -1,4 +1,4 @@
-# [WIP]CUDA Optimized Simple Recurrent Unit (SRU)
+# CUDA Optimized Simple Recurrent Unit (SRU)
 
 - [Training RNNs as Fast as CNNs](https://arxiv.org/abs/1709.02755)
 
@@ -17,6 +17,8 @@
 - Python 2 or 3
 
 ## Language Modeling
+
+### Penn Treebank
 
 | Model | #layers | d   | Perplexity |
 |-------|---------|-----|------------|
