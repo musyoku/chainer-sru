@@ -243,5 +243,7 @@ def run_tests():
 	
 
 if __name__ == "__main__":
+	import numpy
+	numpy.set_printoptions(suppress=True)
 	check_backward(3, 4, 5, True)
 	run_tests()

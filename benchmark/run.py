@@ -38,7 +38,7 @@ def benchmark_sru(batchsize, seq_length, feature_dimension, repeat=50):
 			functions.sum(output).backward()
 		backward_time_mean = (time.time() - start_time) / repeat
 
-	return batchsize, seq_length, feature_dimension, forward_time_mean, backward_time_mean
+	return forward_time_mean, backward_time_mean
 
 def benchmark_lstm(batchsize, seq_length, feature_dimension, repeat=50):
 	layer = links.LSTM(feature_dimension, feature_dimension)
@@ -68,7 +68,7 @@ def benchmark_lstm(batchsize, seq_length, feature_dimension, repeat=50):
 			functions.sum(loss).backward()
 		backward_time_mean = (time.time() - start_time) / repeat
 
-	return batchsize, seq_length, feature_dimension, forward_time_mean, backward_time_mean
+	return forward_time_mean, backward_time_mean
 
 def generate_cmap(colors):
 	values = range(len(colors))
@@ -97,12 +97,12 @@ def main():
 
 	for batchsize in batchsize_list:
 		for seq_length in seq_length_list:
-			for feature_dimension in feature_dimension_list:
-				result_sru = benchmark_sru(batchsize, seq_length, feature_dimension)
-				result_lstm = benchmark_lstm(batchsize, seq_length, feature_dimension)
+			for dimension in feature_dimension_list:
+				result_sru = benchmark_sru(batchsize, seq_length, dimension)
+				result_lstm = benchmark_lstm(batchsize, seq_length, dimension)
 
-				batchsize, seq_length, dimension, forward_sru, backward_sru = result_sru
-				batchsize, seq_length, dimension, forward_lstm, backward_lstm = result_lstm
+				forward_sru, backward_sru = result_sru
+				forward_lstm, backward_lstm = result_lstm
 
 				df = pd.DataFrame({
 					"LSTM": [forward_lstm * 1000, backward_lstm * 1000],

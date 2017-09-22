@@ -391,7 +391,6 @@ class SRUFunction(Function):
 	def backward_cpu(self, inputs, grad_outputs):
 		raise NotImplementedError()
 
-	@profile
 	def backward_gpu(self, inputs, grad_outputs):
 		X, W, B = _as_contiguous(inputs[:3])
 		dtype = X.dtype
@@ -437,42 +436,17 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		# grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
-		# _grad_u = xp.concatenate((grad_u[:, :feature_dimension, :], grad_b), axis=1)
-
-		# import numpy
-		# numpy.set_printoptions(suppress=True)
-		# print(grad_u)
-		# print(_grad_u)
-		# print(W)
-		# print(xp.sum(W, axis=0))
-		# print(xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x)
-		# raise Exception()
-
-		# total_threads = feature_dimension * batchsize * seq_length
-		# thread_per_block = min(512, total_threads)
-		# num_block = total_threads // thread_per_block + 1
-
-		# self._cuda_elementwise("backward_grad_x", 
-		# 	args=[
-		# 		W.data.ptr,
-		# 		grad_x.data.ptr,
-		# 		grad_highway_x.data.ptr,
-		# 		grad_u.data.ptr,
-		# 		batchsize,
-		# 		feature_dimension,
-		# 		seq_length
-		# 	], 
-		# 	block=(thread_per_block, 1, 1), 
-		# 	grid=(num_block, 1, 1))
-
+		if feature_dimension > 500:	# speed up
+			_dot = 0
+			grad_uz, grad_uf, grad_ur = xp.split(grad_u, 3, axis=1)
+			w_z, w_f, w_r = xp.split(W, 3, axis=0)
+			_dot += xp.dot(grad_uz.transpose((0, 2, 1)), w_z).transpose((0, 2, 1))
+			_dot += xp.dot(grad_uf.transpose((0, 2, 1)), w_f).transpose((0, 2, 1))
+			_dot += xp.dot(grad_ur.transpose((0, 2, 1)), w_r).transpose((0, 2, 1))
+		else:
+			_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
 		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
-		# print(xp.mean(abs(grad_x - _grad_x)))
-		# # print(grad_x)
-		# print(grad_b)
 		grad_b = xp.sum(grad_b, axis=(0, 2))
-
-		# print(grad_b)
 
 		total_threads = feature_dimension ** 2 * 3 * batchsize
 		thread_per_block = min(512, total_threads)
@@ -491,35 +465,6 @@ class SRUFunction(Function):
 			grid=(num_block, 1, 1))
 
 		grad_w = xp.sum(grad_w, axis=0)
-		# import numpy
-		# numpy.set_printoptions(suppress=True)
-		# print("grad_u")
-		# print(grad_u)
-		# print("X")
-		# print(X)
-		# print("grad_w")
-		# print(grad_w)
-		# print("sum(grad_w)")
-		# print(xp.sum(grad_w, axis=0))
-		# print("true grad")
-		# _grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
-		# _grad_w = xp.sum(_grad_w * X[:, None, ...], axis=(0, 3))
-		# print(_grad_w)
-		# raise Exception()
-
-		# if len(inputs) == 4:
-		# 	return grad_x, W, grad_b, grad_initial_ct
-		# return grad_x, W, grad_b
-
-		# # if len(inputs) == 4:
-		# # 	return grad_x, W, grad_b, grad_initial_ct
-		# # return grad_x, W, grad_b
-
-		# # raise Exception()
-
-		# grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
-		# grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
-
 
 		if len(inputs) == 4:
 			return grad_x, grad_w, grad_b, grad_initial_ct
