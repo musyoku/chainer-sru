@@ -81,7 +81,7 @@ extern "C"
 				  const float* __restrict__ incoming_grad_h_ptr,
 				  const float* __restrict__ incoming_grad_ct_ptr,
 				  float* __restrict__ grad_highway_x_ptr, 
-				  float* __restrict__ grad_uz_ptr, 
+				  float* __restrict__ grad_u_ptr, 
 				  float* __restrict__ grad_w_ptr,
 				  float* __restrict__ grad_bias_ptr, 
 				  float* __restrict__ grad_init_ct_ptr,
@@ -117,7 +117,9 @@ extern "C"
 		float* grad_bft_ptr = grad_bias_ptr + (feature_index + (batch_index * 2)     * feature_dimension) * seq_length;
 		float* grad_brt_ptr = grad_bias_ptr + (feature_index + (batch_index * 2 + 1) * feature_dimension) * seq_length;
 		float* grad_highway_xt_ptr = grad_highway_x_ptr + column * seq_length;
-		float* grad_uzt_ptr = grad_uz_ptr + column * seq_length;
+		float* grad_uzt_ptr = grad_u_ptr + (feature_index + (batch_index * 3)     * feature_dimension) * seq_length;
+		float* grad_uft_ptr = grad_u_ptr + (feature_index + (batch_index * 3 + 1) * feature_dimension) * seq_length;
+		float* grad_urt_ptr = grad_u_ptr + (feature_index + (batch_index * 3 + 2) * feature_dimension) * seq_length;
 
 		// move to time T
 		xt_ptr  += seq_length - 1;
@@ -341,6 +343,7 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
+		self.U = U
 		self.C = C
 		return H, C, C[..., -1]
 
@@ -358,12 +361,11 @@ class SRUFunction(Function):
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
 
-		U = xp.matmul(W, X)
-
 		grad_highway_x = xp.empty_like(X)
 		grad_uz = xp.empty_like(X)
 		grad_b = xp.empty((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
 		grad_w = xp.empty_like(W)
+		grad_u = xp.empty((batchsize, feature_dimension * 3, seq_length), dtype=self.U.dtype)
 		grad_initial_ct = xp.empty_like(initial_ct)
 
 		incoming_grad_ct = xp.empty_like(initial_ct) if grad_outputs[2] is None else _as_contiguous(grad_outputs[2])
@@ -372,14 +374,14 @@ class SRUFunction(Function):
 		self._cuda_elementwise("backward", 
 			args=[
 				X.data.ptr,
-				U.data.ptr,
+				self.U.data.ptr,
 				B.data.ptr,
 				self.C.data.ptr,
 				initial_ct.data.ptr,
 				incoming_grad_h.data.ptr,
 				incoming_grad_ct.data.ptr,
 				grad_highway_x.data.ptr,
-				grad_uz.data.ptr,
+				grad_u.data.ptr,
 				grad_w.data.ptr,
 				grad_b.data.ptr,
 				grad_initial_ct.data.ptr,
@@ -391,7 +393,7 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
+		grad_u = xp.concatenate((grad_u[:, :feature_dimension, :], grad_b), axis=1)
 		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 
 		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
