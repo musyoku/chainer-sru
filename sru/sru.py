@@ -436,16 +436,17 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		if feature_dimension > 500:	# speed up
-			_dot = 0
-			grad_uz, grad_uf, grad_ur = xp.split(grad_u, 3, axis=1)
-			w_z, w_f, w_r = xp.split(W, 3, axis=0)
-			_dot += xp.dot(grad_uz.transpose((0, 2, 1)), w_z).transpose((0, 2, 1))
-			_dot += xp.dot(grad_uf.transpose((0, 2, 1)), w_f).transpose((0, 2, 1))
-			_dot += xp.dot(grad_ur.transpose((0, 2, 1)), w_r).transpose((0, 2, 1))
-		else:
-			_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
+		# if feature_dimension > 500:	# speed up
+		# 	_dot = 0
+		# 	grad_uz, grad_uf, grad_ur = xp.split(grad_u, 3, axis=1)
+		# 	w_z, w_f, w_r = xp.split(W, 3, axis=0)
+		# 	_dot += xp.dot(grad_uz.transpose((0, 2, 1)), w_z).transpose((0, 2, 1))
+		# 	_dot += xp.dot(grad_uf.transpose((0, 2, 1)), w_f).transpose((0, 2, 1))
+		# 	_dot += xp.dot(grad_ur.transpose((0, 2, 1)), w_r).transpose((0, 2, 1))
+		# else:
+		# 	_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
 			
+		_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
 		grad_x = _dot + grad_highway_x
 		grad_b = xp.sum(grad_b, axis=(0, 2))
 
