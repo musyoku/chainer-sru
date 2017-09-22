@@ -27,4 +27,4 @@
 
 ## Benchmark
 
-![result]()
+![result](https://github.com/musyoku/images/blob/master/sru/result.png?raw=true)
