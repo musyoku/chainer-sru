@@ -16,13 +16,12 @@ args = parser.parse_args()
 
 cuda.get_device(args.gpu_device).use()
 
-def benchmark_sru(batchsize, seq_length, feature_dimension, repeat=100):
+def benchmark_sru(batchsize, seq_length, feature_dimension, repeat=50):
 	layer = SRU(feature_dimension, feature_dimension)
 	x_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32) * 5
 	x_data = cuda.to_gpu(x_data)
 	layer.to_gpu()
 
-	result = []
 	with chainer.no_backprop_mode() and chainer.using_config("train", False):
 		# forward
 		start_time = time.time()
@@ -39,17 +38,14 @@ def benchmark_sru(batchsize, seq_length, feature_dimension, repeat=100):
 			functions.sum(output).backward()
 		backward_time_mean = (time.time() - start_time) / repeat
 
-		result.append((batchsize, seq_length, feature_dimension, forward_time_mean, backward_time_mean))
+	return batchsize, seq_length, feature_dimension, forward_time_mean, backward_time_mean
 
-	return result
-
-def benchmark_lstm(batchsize, seq_length, feature_dimension, repeat=100):
+def benchmark_lstm(batchsize, seq_length, feature_dimension, repeat=50):
 	layer = links.LSTM(feature_dimension, feature_dimension)
 	x_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32) * 5
 	x_data = cuda.to_gpu(x_data)
 	layer.to_gpu()
 
-	result = []
 	with chainer.no_backprop_mode() and chainer.using_config("train", False):
 		# forward
 		start_time = time.time()
@@ -72,9 +68,7 @@ def benchmark_lstm(batchsize, seq_length, feature_dimension, repeat=100):
 			functions.sum(loss).backward()
 		backward_time_mean = (time.time() - start_time) / repeat
 
-		result.append((batchsize, seq_length, feature_dimension, forward_time_mean, backward_time_mean))
-
-	return result
+	return batchsize, seq_length, feature_dimension, forward_time_mean, backward_time_mean
 
 def generate_cmap(colors):
 	values = range(len(colors))
@@ -107,8 +101,8 @@ def main():
 				result_sru = benchmark_sru(batchsize, seq_length, feature_dimension)
 				result_lstm = benchmark_lstm(batchsize, seq_length, feature_dimension)
 
-				batchsize, seq_length, dimension, forward_sru, backward_sru = sru
-				batchsize, seq_length, dimension, forward_lstm, backward_lstm = lstm
+				batchsize, seq_length, dimension, forward_sru, backward_sru = result_sru
+				batchsize, seq_length, dimension, forward_lstm, backward_lstm = result_lstm
 
 				df = pd.DataFrame({
 					"LSTM": [forward_lstm * 1000, backward_lstm * 1000],
