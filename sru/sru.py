@@ -134,6 +134,8 @@ extern "C"
 		grad_brt_ptr += seq_length - 1;
 		grad_bft_ptr += seq_length - 1;
 		grad_uzt_ptr += seq_length - 1;
+		grad_uft_ptr += seq_length - 1;
+		grad_urt_ptr += seq_length - 1;
 		incoming_grad_ht_ptr += seq_length - 1;
 
 		float incoming_grad_ct = *(incoming_grad_ct_ptr + column);	// gradient propagating from time t to t-1
@@ -189,38 +191,8 @@ extern "C"
 	}
 
 	__global__ 
-	void backward_grad_x(
-			const float* __restrict__ w_ptr, 
-			float* __restrict__ grad_x_ptr, 
-			const float* __restrict__ grad_highway_x_ptr, 
-			const float* __restrict__ grad_u_ptr, 
-			const int batchsize, 
-			const int feature_dimension, 
-			const int seq_length)
-	{
-		int identifier = blockIdx.x * blockDim.x + threadIdx.x;				// 0 <= identifier < batchsize * feature_dimension * seq_length
-		int total_threads = batchsize * feature_dimension * seq_length;
-		if(identifier >= total_threads) return;
-
-		int t = identifier % seq_length;
-		int batch_index = identifier / (feature_dimension * seq_length);	// 0 <= batch_index < batchsize
-		int feature_index = (identifier / seq_length) % feature_dimension;					// 0 <= feature_index < feature_dimension
-
-		// xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
-		float* grad_xt_ptr = grad_x_ptr + identifier;
-		*grad_xt_ptr = 0;
-		for(int d = 0;d < feature_dimension * 3;d++)
-		{
-			const float* gptr = grad_u_ptr + (d + (batch_index * 3) * feature_dimension) * seq_length + t;
-			*grad_xt_ptr += *(w_ptr + d * feature_dimension + feature_index) * *gptr;
-		}
-		// highway connection
-		*grad_xt_ptr += *(grad_highway_x_ptr + identifier);
-	}
-
-	__global__ 
 	void backward_grad_w(
-			const float* __restrict__ grad_x_ptr, 
+			const float* __restrict__ x_ptr, 
 			const float* __restrict__ grad_u_ptr, 
 			float* __restrict__ grad_w_ptr, 
 			const int batchsize, 
@@ -228,13 +200,24 @@ extern "C"
 			const int seq_length)
 	{
 		int identifier = blockIdx.x * blockDim.x + threadIdx.x;				// 0 <= identifier < batchsize * feature_dimension * seq_length
-		int total_threads = feature_dimension * feature_dimension * 3;
+		int total_threads = feature_dimension * feature_dimension * 3 * batchsize;
 		if(identifier >= total_threads) return;
 
-		int batch_index = identifier / (feature_dimension * seq_length);	// 0 <= batch_index < batchsize
-		int feature_index = (identifier / seq_length) % feature_dimension;					// 0 <= feature_index < feature_dimension
+		int batch_index = identifier / (feature_dimension * feature_dimension * 3);	// 0 <= batch_index < batchsize
+		int feature_index = identifier % feature_dimension;							// 0 <= feature_index < feature_dimension
+		int column = (identifier / feature_dimension) % (feature_dimension * 3);	// 0 <= column < feature_dimension * 3
 
-		*grad_w_ptr = feature_index;
+		float* target_ptr = grad_w_ptr + identifier;
+
+		*target_ptr = 0;
+		for(int t = 0;t < seq_length;t++)
+		{
+			const int shift_u = (column + batch_index * feature_dimension * 3) * seq_length + t;
+			const int shift_x = (feature_index + batch_index * feature_dimension) * seq_length + t;
+			const float u = *(grad_u_ptr + shift_u);
+			const float x = *(x_ptr + shift_x);
+			*target_ptr += u * x;
+		}
 	}
 }
 """
@@ -331,8 +314,9 @@ class SRUFunction(Function):
 	# x: (batchsize, feature_dimension, seq_length)
 	def forward_cpu(self, inputs):
 		X, W, B = inputs[:3]
+		dtype = X.dtype
 		batchsize, feature_dimension, seq_length = X.shape
-		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=X.dtype)
+		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=dtype)
 
 		U = np.matmul(W, X)
 		Z, F, R = np.split(U, 3, axis=1)
@@ -368,11 +352,12 @@ class SRUFunction(Function):
 	# x: (batchsize, feature_dimension, seq_length)
 	def forward_gpu(self, inputs):
 		X, W, B = _as_contiguous(inputs[:3])
+		dtype = X.dtype
 		
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 
-		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
+		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=dtype)
 
 		U = xp.matmul(W, X)
 
@@ -380,8 +365,8 @@ class SRUFunction(Function):
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
 
-		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
-		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=X.dtype)
+		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=dtype)
+		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=dtype)
 		
 		self._cuda_elementwise("forward", 
 			args=[
@@ -406,11 +391,13 @@ class SRUFunction(Function):
 	def backward_cpu(self, inputs, grad_outputs):
 		raise NotImplementedError()
 
+	@profile
 	def backward_gpu(self, inputs, grad_outputs):
 		X, W, B = _as_contiguous(inputs[:3])
+		dtype = X.dtype
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
-		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=X.dtype)
+		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=dtype)
 
 
 		total_columns = feature_dimension * batchsize
@@ -419,9 +406,9 @@ class SRUFunction(Function):
 
 		grad_x = xp.zeros_like(X)
 		grad_highway_x = xp.zeros_like(X)
-		grad_b = xp.zeros((batchsize, feature_dimension * 2, seq_length), dtype=B.dtype)
-		grad_w = xp.zeros((batchsize,) + W.shape + (seq_length,), dtype=W.dtype)
-		grad_u = xp.zeros((batchsize, feature_dimension * 3, seq_length), dtype=self.U.dtype)
+		grad_b = xp.zeros((batchsize, feature_dimension * 2, seq_length), dtype=dtype)
+		grad_w = xp.zeros((batchsize,) + W.shape, dtype=dtype)
+		grad_u = xp.zeros((batchsize, feature_dimension * 3, seq_length), dtype=dtype)
 		grad_initial_ct = xp.zeros_like(initial_ct)
 
 		# initialize with zero
@@ -451,51 +438,49 @@ class SRUFunction(Function):
 			grid=(num_block, 1, 1))
 
 		# grad_u = xp.concatenate((grad_uz, grad_b), axis=1)
-		# grad_u = xp.concatenate((grad_u[:, :feature_dimension, :], grad_b), axis=1)
+		# _grad_u = xp.concatenate((grad_u[:, :feature_dimension, :], grad_b), axis=1)
 
-		# print(grad_x)
+		# import numpy
+		# numpy.set_printoptions(suppress=True)
+		# print(grad_u)
+		# print(_grad_u)
 		# print(W)
 		# print(xp.sum(W, axis=0))
 		# print(xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x)
 		# raise Exception()
 
-		total_threads = feature_dimension * batchsize * seq_length
-		thread_per_block = min(512, total_threads)
-		num_block = total_threads // thread_per_block + 1
+		# total_threads = feature_dimension * batchsize * seq_length
+		# thread_per_block = min(512, total_threads)
+		# num_block = total_threads // thread_per_block + 1
 
-		self._cuda_elementwise("backward_grad_x", 
-			args=[
-				W.data.ptr,
-				grad_x.data.ptr,
-				grad_highway_x.data.ptr,
-				grad_u.data.ptr,
-				batchsize,
-				feature_dimension,
-				seq_length
-			], 
-			block=(thread_per_block, 1, 1), 
-			grid=(num_block, 1, 1))
+		# self._cuda_elementwise("backward_grad_x", 
+		# 	args=[
+		# 		W.data.ptr,
+		# 		grad_x.data.ptr,
+		# 		grad_highway_x.data.ptr,
+		# 		grad_u.data.ptr,
+		# 		batchsize,
+		# 		feature_dimension,
+		# 		seq_length
+		# 	], 
+		# 	block=(thread_per_block, 1, 1), 
+		# 	grid=(num_block, 1, 1))
 
-		# import numpy
-		# numpy.set_printoptions(suppress=True)
-		# _grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
+		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 		# print(xp.mean(abs(grad_x - _grad_x)))
 		# # print(grad_x)
 		# print(grad_b)
 		grad_b = xp.sum(grad_b, axis=(0, 2))
+
 		# print(grad_b)
 
-		if len(inputs) == 4:
-			return grad_x, W, grad_b, grad_initial_ct
-		return grad_x, W, grad_b
-		
 		total_threads = feature_dimension ** 2 * 3 * batchsize
 		thread_per_block = min(512, total_threads)
 		num_block = total_threads // thread_per_block + 1
 
 		self._cuda_elementwise("backward_grad_w", 
 			args=[
-				grad_x.data.ptr,
+				X.data.ptr,
 				grad_u.data.ptr,
 				grad_w.data.ptr,
 				batchsize,
@@ -505,15 +490,35 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-
-		if len(inputs) == 4:
-			return grad_x, W, grad_b, grad_initial_ct
-		return grad_x, W, grad_b
-
+		grad_w = xp.sum(grad_w, axis=0)
+		# import numpy
+		# numpy.set_printoptions(suppress=True)
+		# print("grad_u")
+		# print(grad_u)
+		# print("X")
+		# print(X)
+		# print("grad_w")
+		# print(grad_w)
+		# print("sum(grad_w)")
+		# print(xp.sum(grad_w, axis=0))
+		# print("true grad")
+		# _grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
+		# _grad_w = xp.sum(_grad_w * X[:, None, ...], axis=(0, 3))
+		# print(_grad_w)
 		# raise Exception()
 
-		grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
-		grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
+		# if len(inputs) == 4:
+		# 	return grad_x, W, grad_b, grad_initial_ct
+		# return grad_x, W, grad_b
+
+		# # if len(inputs) == 4:
+		# # 	return grad_x, W, grad_b, grad_initial_ct
+		# # return grad_x, W, grad_b
+
+		# # raise Exception()
+
+		# grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
+		# grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
 
 
 		if len(inputs) == 4:
