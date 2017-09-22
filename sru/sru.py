@@ -445,6 +445,7 @@ class SRUFunction(Function):
 			_dot += xp.dot(grad_ur.transpose((0, 2, 1)), w_r).transpose((0, 2, 1))
 		else:
 			_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
+			
 		grad_x = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 		grad_b = xp.sum(grad_b, axis=(0, 2))
 
