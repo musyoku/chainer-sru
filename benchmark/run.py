@@ -95,6 +95,9 @@ def main():
 	seq_length_list = [16, 32]
 	feature_dimension_list = [128, 256, 512, 1024]
 
+	# dummy
+	result_sru = benchmark_sru(16, 16, 128)
+
 	for batchsize in batchsize_list:
 		for seq_length in seq_length_list:
 			for dimension in feature_dimension_list:
