@@ -86,7 +86,7 @@ def check_outputs():
 	print(np.mean(abs(h_cpu.data - cuda.to_cpu(h_gpu.data))))
 
 
-def autograd(X, W, b, initial_ct=None, use_tanh=False, mask_h=None, mask_x=None):
+def autograd(X, W, b, initial_ct=None, use_tanh=False, mask_x=None):
 	batchsize, feature_dimension, seq_length = X.shape
 	if initial_ct is None:
 		initial_ct = chainer.Variable(np.zeros((batchsize, feature_dimension), dtype=X.dtype))
@@ -104,10 +104,6 @@ def autograd(X, W, b, initial_ct=None, use_tanh=False, mask_h=None, mask_x=None)
 	bf = functions.broadcast_to(b[:feature_dimension], (batchsize, feature_dimension))
 	br = functions.broadcast_to(b[feature_dimension:], (batchsize, feature_dimension))
 
-	mask_h = 1 if mask_h is None else mask_h
-	mask_x = 1 if mask_x is None else mask_x
-
-
 	ct = initial_ct
 
 	for t in range(seq_length):
@@ -122,7 +118,6 @@ def autograd(X, W, b, initial_ct=None, use_tanh=False, mask_h=None, mask_x=None)
 		g_ct = ct
 		if use_tanh:
 			g_ct = functions.tanh(ct)
-		g_ct *= mask_h
 
 		ht = rt * g_ct + (1 - rt) * xt
 		H = functions.expand_dims(ht, 2) if H is None else functions.concat((H, functions.expand_dims(ht, 2)), axis=2)
@@ -156,7 +151,7 @@ def check_matmul_grad():
 	print(xp.sum(W.data, axis=0))
 
 def check_forward(batchsize, feature_dimension, seq_length, use_tanh):
-	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 20
+	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 10
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
 
 	with chainer.no_backprop_mode() and chainer.using_config("train", False):
@@ -178,7 +173,7 @@ def check_forward(batchsize, feature_dimension, seq_length, use_tanh):
 	assert(xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data))) <= threshold), xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data)))
 
 def check_backward(batchsize, feature_dimension, seq_length, use_tanh):
-	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 5
+	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 10
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
 	x_cpu = chainer.Variable(x_cpu_data)
 	x_gpu = chainer.Variable(x_gpu_data)
@@ -253,19 +248,22 @@ def run_tests():
 					print((batchsize, feature_dimension, seq_length, use_tanh), "	OK")
 	
 def check_dropout_forward(batchsize, feature_dimension, seq_length, use_tanh):
-	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 20
+	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 10
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
 
 	with chainer.using_config("train", True):
 		# get true output
 		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh, dropout=0.5)
-		mask_h = layer.generate_dropout_mask(x_cpu_data)
 		mask_x = layer.generate_dropout_mask(x_cpu_data)
-		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., :seq_length], layer.W, layer.B, None, layer.use_tanh, mask_h, mask_x)
+		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., :seq_length], layer.W, layer.B, None, layer.use_tanh, mask_x)
+		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_x)
+		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_x)
 
 		# get cuda output
 		layer.to_gpu(gpu_device)
-		output, cell, last_cell = layer(x_gpu_data[..., :seq_length], None, cuda.to_gpu(mask_h), cuda.to_gpu(mask_x))
+		output, cell, last_cell = layer(x_gpu_data[..., :seq_length], None, cuda.to_gpu(mask_x))
+		output, cell, last_cell = layer(x_gpu_data[..., seq_length:seq_length*2], last_cell, cuda.to_gpu(mask_x))
+		output, cell, last_cell = layer(x_gpu_data[..., seq_length*2:], last_cell, cuda.to_gpu(mask_x))
 
 	threshold = 1e-5
 	assert(xp.mean(abs(output_true.data - cuda.to_cpu(output.data))) <= threshold), xp.mean(abs(output_true.data - cuda.to_cpu(output.data)))
@@ -273,7 +271,7 @@ def check_dropout_forward(batchsize, feature_dimension, seq_length, use_tanh):
 	assert(xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data))) <= threshold), xp.mean(abs(last_cell_true.data - cuda.to_cpu(last_cell.data)))
 
 def check_dropout_backward(batchsize, feature_dimension, seq_length, use_tanh):
-	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 5
+	x_cpu_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length * 3)).astype(np.float32) * 10
 	x_gpu_data = cuda.to_gpu(x_cpu_data, gpu_device)
 	x_cpu = chainer.Variable(x_cpu_data)
 	x_gpu = chainer.Variable(x_gpu_data)
@@ -281,11 +279,10 @@ def check_dropout_backward(batchsize, feature_dimension, seq_length, use_tanh):
 	with chainer.using_config("train", True):
 		# get true output
 		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh, dropout=0.5)
-		mask_h = layer.generate_dropout_mask(x_cpu_data)
 		mask_x = layer.generate_dropout_mask(x_cpu_data)
-		output_true, cell_true, last_cell_true = autograd(x_cpu[..., :seq_length], layer.W, layer.B, None, layer.use_tanh, mask_h, mask_x)
-		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_h, mask_x)
-		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_h, mask_x)
+		output_true, cell_true, last_cell_true = autograd(x_cpu[..., :seq_length], layer.W, layer.B, None, layer.use_tanh, mask_x)
+		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_x)
+		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_x)
 
 		layer.cleargrads()
 		functions.sum(output_true).backward()
@@ -298,9 +295,9 @@ def check_dropout_backward(batchsize, feature_dimension, seq_length, use_tanh):
 		# print(last_cell_true)
 
 		layer.to_gpu(gpu_device)
-		output, cell, last_cell = layer(x_gpu[..., :seq_length], None, cuda.to_gpu(mask_h), cuda.to_gpu(mask_x))
-		output, cell, last_cell = layer(x_gpu[..., seq_length:seq_length*2], last_cell, cuda.to_gpu(mask_h), cuda.to_gpu(mask_x))
-		output, cell, last_cell = layer(x_gpu[..., seq_length*2:], last_cell, cuda.to_gpu(mask_h), cuda.to_gpu(mask_x))
+		output, cell, last_cell = layer(x_gpu[..., :seq_length], None, cuda.to_gpu(mask_x))
+		output, cell, last_cell = layer(x_gpu[..., seq_length:seq_length*2], last_cell, cuda.to_gpu(mask_x))
+		output, cell, last_cell = layer(x_gpu[..., seq_length*2:], last_cell, cuda.to_gpu(mask_x))
 
 		# print(np.mean(abs(output_true.data - cuda.to_cpu(output.data))))
 		# print(np.mean(abs(cell_true.data - cuda.to_cpu(cell.data))))
@@ -335,5 +332,5 @@ def check_dropout_backward(batchsize, feature_dimension, seq_length, use_tanh):
 
 if __name__ == "__main__":
 	np.set_printoptions(suppress=True)
-	check_backward(3, 4, 5, True)
+	check_dropout_forward(3, 4, 5, True)
 	run_tests()

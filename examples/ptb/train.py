@@ -20,7 +20,7 @@ class RNN():
 
 		self.model = nn.Module()
 
-		for l in range(num_layers):
+		for _ in range(num_layers):
 			self.model.add(nn.SRU(ndim_feature, ndim_feature, use_tanh, dropout_rnn if variational_dropout else 0))
 
 		self.model.embed = nn.EmbedID(vocab_size, ndim_feature)
@@ -43,12 +43,12 @@ class RNN():
 		in_data = functions.transpose(in_data, (0, 2, 1))
 		in_data = functions.dropout(in_data, self.dropout_softmax)
 
-		for l, sru in enumerate(self.model.layers):
+		for index, sru in enumerate(self.model.layers):
 			if self.variational_dropout is False:
 				in_data = functions.dropout(in_data, self.dropout_rnn)
-			hidden, cell, context = sru(in_data, self.contexts[l])
+			hidden, cell, context = sru(in_data, self.contexts[index])
 			in_data = hidden
-			self.contexts[l] = context
+			self.contexts[index] = context
 
 		out_data = self.model.fc(functions.dropout(in_data, self.dropout_softmax))
 		if flatten:
