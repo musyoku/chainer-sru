@@ -20,9 +20,8 @@ class RNN():
 		for l in range(num_layers):
 			self.model.add(nn.SRU(ndim_feature, ndim_feature))
 
-		with self.model.init_scope():
-			self.model.embed = nn.EmbedID(vocab_size, ndim_feature)
-			self.model.fc = nn.Convolution1D(ndim_feature, vocab_size)
+		self.model.embed = nn.EmbedID(vocab_size, ndim_feature)
+		self.model.fc = nn.Convolution1D(ndim_feature, vocab_size)
 
 		for param in self.model.params():
 			if param.name == "W":
@@ -36,15 +35,14 @@ class RNN():
 	def __call__(self, x, flatten=False):
 		batchsize, seq_length = x.shape
 		x = x.reshape((-1,))	# flatten
-		h0 = self.model.embed(x)
-		h0 = functions.reshape(h0, (batchsize, seq_length, -1))
-		h0 = functions.transpose(h0, (0, 2, 1))
+		in_data = self.model.embed(x)
+		in_data = functions.reshape(in_data, (batchsize, seq_length, -1))
+		in_data = functions.transpose(in_data, (0, 2, 1))
 
-		in_data = h0
 		for l, sru in enumerate(self.model.layers):
-			h, c, lc = sru(functions.dropout(in_data), self.contexts[l])
-			in_data = h
-			self.contexts[l] = lc
+			hidden, cell, context = sru(functions.dropout(in_data), self.contexts[l])
+			in_data = hidden
+			self.contexts[l] = context
 
 		out_data = self.model.fc(functions.dropout(in_data))
 		if flatten:

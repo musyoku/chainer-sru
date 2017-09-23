@@ -273,10 +273,11 @@ class Module(chainer.Chain):
 			return super(chainer.Link, self).__setattr__(name, value)	# prevent module from being added to self._children
 
 		if isinstance(value, chainer.Link):
-			if name.startswith("_sequential_"):
+			with self.init_scope():
+				if name.startswith("_sequential_"):
+					return super(Module, self).__setattr__(name, value)
+				self.links.append((name, value))
 				return super(Module, self).__setattr__(name, value)
-			self.links.append((name, value))
-			return super(Module, self).__setattr__(name, value)
 
 		super(Module, self).__setattr__(name, value)
 

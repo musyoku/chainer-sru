@@ -472,22 +472,37 @@ class SRUFunction(Function):
 			return grad_x, grad_w, grad_b, grad_initial_ct
 		return grad_x, grad_w, grad_b
 
-def sru(x, W, B, initial_ct=None, use_tanh=True):
+def sru(x, W, B, initial_ct=None, use_tanh=True, mask=None):
 	func = SRUFunction(use_tanh)
 	if initial_ct is None:
 		return func(x, W, B)
-	return func(x, W, B, initial_ct)
+	if mask is None:
+		return func(x, W, B, initial_ct)
+	mask_h, mask_x = mask
+	return func(x, W, B, initial_ct, mask_h, mask_x)
 
 class SRU(link.Link):
-	def __init__(self, in_channels, out_channels, use_tanh=True, initialW=None):
+
+	def __init__(self, in_channels, out_channels, use_tanh=True, dropout=0):
 		super().__init__()
 		self.in_channels = in_channels
 		self.out_channels = out_channels
 		self.use_tanh = use_tanh
+		self.dropout = dropout
 
 		with self.init_scope():
-			self.W = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels))
-			self.B = variable.Parameter(initializers._get_initializer(0), out_channels * 2)
+			self.W = variable.Parameter(shape=(out_channels * 3, in_channels))
+			self.B = variable.Parameter(shape=(out_channels * 2,))
 
 	def __call__(self, x, initial_ct):
-		return sru(x, self.W, self.B, initial_ct, self.use_tanh)
+		if self.dropout == 0:
+			return sru(x, self.W, self.B, initial_ct, self.use_tanh)
+		mask_h = self.get_dropout_mask(x)
+		mask_x = self.get_dropout_mask(x)
+		return sru(x, self.W, self.B, initial_ct, self.use_tanh, (mask_h, mask_x))
+
+	def get_dropout_mask(self, x):
+		xp = cuda.get_array_module(x)
+        mask = xp.random.rand(x.shape) >= self.dropout
+        return mask
+		
