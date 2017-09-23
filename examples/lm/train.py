@@ -9,16 +9,17 @@ import sru.nn as nn
 from optim import Optimizer
 
 class RNN():
-	def __init__(self, vocab_size, ndim_feature, num_layers=2):
+	def __init__(self, vocab_size, ndim_feature, num_layers=2, use_tanh=True, dropout_embedding_softmax=0.75, dropout_rnn=0.2):
 		super(RNN, self).__init__()
 		self.vocab_size = vocab_size
 		self.ndim_feature = ndim_feature
 		self.num_layers = num_layers
+		self.dropout_prob = dropout_embedding_softmax
 
 		self.model = nn.Module()
 
 		for l in range(num_layers):
-			self.model.add(nn.SRU(ndim_feature, ndim_feature))
+			self.model.add(nn.SRU(ndim_feature, ndim_feature, use_tanh, dropout_rnn))
 
 		self.model.embed = nn.EmbedID(vocab_size, ndim_feature)
 		self.model.fc = nn.Convolution1D(ndim_feature, vocab_size)
@@ -38,13 +39,14 @@ class RNN():
 		in_data = self.model.embed(x)
 		in_data = functions.reshape(in_data, (batchsize, seq_length, -1))
 		in_data = functions.transpose(in_data, (0, 2, 1))
+		in_data = functions.dropout(in_data, self.dropout_prob)
 
 		for l, sru in enumerate(self.model.layers):
-			hidden, cell, context = sru(functions.dropout(in_data), self.contexts[l])
+			hidden, cell, context = sru(in_data, self.contexts[l])
 			in_data = hidden
 			self.contexts[l] = context
 
-		out_data = self.model.fc(functions.dropout(in_data))
+		out_data = self.model.fc(functions.dropout(in_data, self.dropout_prob))
 		if flatten:
 			out_data = functions.reshape(functions.swapaxes(out_data, 1, 2), (-1, self.vocab_size))
 
@@ -85,6 +87,8 @@ def main():
 	parser.add_argument("--grad-clip", "-gc", type=float, default=5)
 	parser.add_argument("--learning-rate", "-lr", type=float, default=1)
 	parser.add_argument("--weight-decay", "-wd", type=float, default=0)
+	parser.add_argument("--dropout-embedding-softmax", "-dos", type=float, default=0.75)
+	parser.add_argument("--dropout-rnn-variational", "-dov", type=float, default=0.2)
 	parser.add_argument("--momentum", "-mo", type=float, default=0.9)
 	parser.add_argument("--optimizer", "-opt", type=str, default="msgd")
 	parser.add_argument("--ndim-feature", "-nf", type=int, default=650)
