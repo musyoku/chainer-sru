@@ -9,7 +9,7 @@ import sru.nn as nn
 from optim import Optimizer
 
 class RNN():
-	def __init__(self, vocab_size, ndim_feature, num_layers=2, use_tanh=True, dropout_embedding_softmax=0.75, dropout_rnn=0.2, variational_dropout=True):
+	def __init__(self, vocab_size, ndim_feature, num_layers=2, use_tanh=True, dropout_embedding_softmax=0.75, dropout_rnn=0.2, variational_dropout=False):
 		super(RNN, self).__init__()
 		self.vocab_size = vocab_size
 		self.ndim_feature = ndim_feature
@@ -94,6 +94,7 @@ def main():
 	parser.add_argument("--dropout-embedding-softmax", "-dos", type=float, default=0.75)
 	parser.add_argument("--dropout-rnn", "-dor", type=float, default=0.2)
 	parser.add_argument("--variational-dropout", "-vdo", dest="variational_dropout", action="store_true", default=False)
+	parser.add_argument("--use-tanh", "-tanh", dest="use_tanh", action="store_true", default=False)
 	parser.add_argument("--momentum", "-mo", type=float, default=0.9)
 	parser.add_argument("--optimizer", "-opt", type=str, default="msgd")
 	parser.add_argument("--ndim-feature", "-nf", type=int, default=650)
@@ -113,7 +114,13 @@ def main():
 	dataset_dev = np.asarray(dataset_dev, dtype=np.int32)
 
 	vocab_size = max(dataset_train) + 1
-	rnn = RNN(vocab_size, args.ndim_feature, args.num_layers)
+	rnn = RNN(vocab_size,
+		ndim_feature=args.ndim_feature, 
+		num_layers=args.num_layers,
+		use_tanh=args.use_tanh,
+		dropout_embedding_softmax=args.dropout_embedding_softmax, 
+		dropout_rnn=args.dropout_rnn, 
+		variational_dropout=args.variational_dropout)
 	rnn.load(args.model_filename)
 
 	total_iterations_train = len(dataset_train) // (args.seq_length * args.batchsize)
