@@ -311,12 +311,35 @@ class SRUFunction(Function):
 				ct_type.shape[1] == x_type.shape[1],
 			)
 
+
+		if type_check.eval(n_in) >= 4:
+			ct_type = in_types[3]
+			type_check.expect(
+				ct_type.dtype == x_type.dtype,
+				ct_type.ndim == 2,
+				ct_type.shape[1] == x_type.shape[1],
+			)
+
+		if type_check.eval(n_in) == 6:
+			mask_h_type = in_types[4]
+			mask_x_type = in_types[4]
+			type_check.expect(
+				mask_h_type.dtype == x_type.dtype,
+				mask_h_type.ndim == 3,
+				mask_h_type.shape[1] == x_type.shape[1],
+				mask_x_type.dtype == x_type.dtype,
+				mask_x_type.ndim == 3,
+				mask_x_type.shape[1] == x_type.shape[1],
+			)
+			
 	# x: (batchsize, feature_dimension, seq_length)
 	def forward_cpu(self, inputs):
 		X, W, B = inputs[:3]
 		dtype = X.dtype
 		batchsize, feature_dimension, seq_length = X.shape
 		ct = inputs[3] if len(inputs) == 4 else np.zeros((batchsize, feature_dimension), dtype=dtype)
+		mask_h = inputs[4] if len(inputs) == 6 else None
+		mask_x = inputs[5] if len(inputs) == 6 else None
 
 		U = np.matmul(W, X)
 		Z, F, R = np.split(U, 3, axis=1)
@@ -358,6 +381,8 @@ class SRUFunction(Function):
 		batchsize, feature_dimension, seq_length = X.shape
 
 		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=dtype)
+		mask_h = inputs[4] if len(inputs) == 6 else None
+		mask_x = inputs[5] if len(inputs) == 6 else None
 
 		U = xp.matmul(W, X)
 
@@ -397,7 +422,8 @@ class SRUFunction(Function):
 		xp = cuda.get_array_module(W)
 		batchsize, feature_dimension, seq_length = X.shape
 		initial_ct = _as_contiguous(inputs[3]) if len(inputs) == 4 else xp.zeros((batchsize, feature_dimension), dtype=dtype)
-
+		mask_h = inputs[4] if len(inputs) == 6 else None
+		mask_x = inputs[5] if len(inputs) == 6 else None
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
@@ -494,11 +520,11 @@ class SRU(link.Link):
 			self.W = variable.Parameter(shape=(out_channels * 3, in_channels))
 			self.B = variable.Parameter(shape=(out_channels * 2,))
 
-	def __call__(self, x, initial_ct):
+	def __call__(self, x, initial_ct, mask_h=None, mask_x=None):
 		if self.dropout == 0:
 			return sru(x, self.W, self.B, initial_ct, self.use_tanh)
-		mask_h = self.get_dropout_mask(x)
-		mask_x = self.get_dropout_mask(x)
+		mask_h = self.get_dropout_mask(x) if mask_h is None else mask_h
+		mask_x = self.get_dropout_mask(x) if mask_x is None else mask_x
 		return sru(x, self.W, self.B, initial_ct, self.use_tanh, (mask_h, mask_x))
 
 	def get_dropout_mask(self, x):
