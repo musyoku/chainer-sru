@@ -332,7 +332,8 @@ def check_dropout_backward(batchsize, feature_dimension, seq_length, use_tanh):
 	assert(xp.mean(abs(b_grad_true - cuda.to_cpu(layer.B.grad))) <= threshold), xp.mean(abs(b_grad_true - cuda.to_cpu(layer.B.grad)))
 	assert(xp.mean(abs(w_grad_true - cuda.to_cpu(layer.W.grad))) <= threshold), xp.mean(abs(w_grad_true - cuda.to_cpu(layer.W.grad)))
 	assert(xp.mean(abs(x_grad_true - cuda.to_cpu(x_gpu.grad))) <= threshold), xp.mean(abs(x_grad_true - cuda.to_cpu(x_gpu.grad)))
-	
+
 if __name__ == "__main__":
 	np.set_printoptions(suppress=True)
+	check_backward(3, 4, 5, True)
 	run_tests()

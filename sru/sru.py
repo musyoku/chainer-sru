@@ -377,22 +377,25 @@ class SRUFunction(Function):
 		if mask_x is not None:
 			X *= mask_x[..., None]
 
-		U = xp.matmul(W, X)
+
+		self.col = conv_nd.im2col_nd_gpu(X, (1,), (1,), (0,), cover_all=False)
+		self.U = _as_contiguous(xp.tensordot(self.col, W[..., None], ((1, 2), (1, 2))).astype(X.dtype, copy=False).transpose((0, 2, 1)))
+		# U = xp.matmul(W, X)
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
 		num_block = total_columns // thread_per_block + 1
 
 		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=dtype)
-		C = xp.empty((batchsize, feature_dimension, seq_length), dtype=dtype)
+		self.C = xp.empty((batchsize, feature_dimension, seq_length), dtype=dtype)
 		
 		self._cuda_elementwise("forward", 
 			args=[
 				X.data.ptr,
-				U.data.ptr,
+				self.U.data.ptr,
 				B.data.ptr,
 				initial_ct.data.ptr,
-				C.data.ptr,
+				self.C.data.ptr,
 				H.data.ptr,
 				mask_h.data.ptr if mask_h is not None else 0,
 				batchsize,
@@ -403,9 +406,7 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		self.U = U
-		self.C = C
-		return H, C, C[..., -1]
+		return H, self.C, self.C[..., -1]
 
 	def backward_cpu(self, inputs, grad_outputs):
 		raise NotImplementedError()
@@ -471,29 +472,35 @@ class SRUFunction(Function):
 		# else:
 		# 	_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
 			
-		_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
-		grad_x = _dot + grad_highway_x
+		# _dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
+		grad_x = xp.matmul(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
 		if mask_x is not None:
 			grad_x *= mask_x[..., None]
+
 		grad_b = xp.sum(grad_b, axis=(0, 2))
 
-		total_threads = feature_dimension ** 2 * 3 * batchsize
-		thread_per_block = min(512, total_threads)
-		num_block = total_threads // thread_per_block + 1
+		# grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
+		# grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
 
-		self._cuda_elementwise("backward_grad_w", 
-			args=[
-				X.data.ptr,
-				grad_u.data.ptr,
-				grad_w.data.ptr,
-				batchsize,
-				feature_dimension,
-				seq_length
-			], 
-			block=(thread_per_block, 1, 1), 
-			grid=(num_block, 1, 1))
+		grad_w = xp.tensordot(grad_u, self.col, ((0, 2), (0, 3))).astype(W.dtype, copy=False).reshape((feature_dimension * 3, feature_dimension))
 
-		grad_w = xp.sum(grad_w, axis=0)
+		# total_threads = feature_dimension ** 2 * 3 * batchsize
+		# thread_per_block = min(512, total_threads)
+		# num_block = total_threads // thread_per_block + 1
+
+		# self._cuda_elementwise("backward_grad_w", 
+		# 	args=[
+		# 		X.data.ptr,
+		# 		grad_u.data.ptr,
+		# 		grad_w.data.ptr,
+		# 		batchsize,
+		# 		feature_dimension,
+		# 		seq_length
+		# 	], 
+		# 	block=(thread_per_block, 1, 1), 
+		# 	grid=(num_block, 1, 1))
+
+		# grad_w = xp.sum(grad_w, axis=0)
 
 		if len(inputs) == 6:
 			return grad_x, grad_w, grad_b, grad_initial_ct, None, None
