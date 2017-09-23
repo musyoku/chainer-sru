@@ -189,36 +189,6 @@ extern "C"
 		}
 		*(grad_init_ct_ptr + column) = incoming_grad_ct;
 	}
-
-	__global__ 
-	void backward_grad_w(
-			const float* __restrict__ x_ptr, 
-			const float* __restrict__ grad_u_ptr, 
-			float* __restrict__ grad_w_ptr, 
-			const int batchsize, 
-			const int feature_dimension, 
-			const int seq_length)
-	{
-		int identifier = blockIdx.x * blockDim.x + threadIdx.x;				// 0 <= identifier < batchsize * feature_dimension * seq_length
-		int total_threads = feature_dimension * feature_dimension * 3 * batchsize;
-		if(identifier >= total_threads) return;
-
-		int batch_index = identifier / (feature_dimension * feature_dimension * 3);	// 0 <= batch_index < batchsize
-		int feature_index = identifier % feature_dimension;							// 0 <= feature_index < feature_dimension
-		int column = (identifier / feature_dimension) % (feature_dimension * 3);	// 0 <= column < feature_dimension * 3
-
-		float* target_ptr = grad_w_ptr + identifier;
-
-		*target_ptr = 0;
-		for(int t = 0;t < seq_length;t++)
-		{
-			const int shift_u = (column + batch_index * feature_dimension * 3) * seq_length + t;
-			const int shift_x = (feature_index + batch_index * feature_dimension) * seq_length + t;
-			const float u = *(grad_u_ptr + shift_u);
-			const float x = *(x_ptr + shift_x);
-			*target_ptr += u * x;
-		}
-	}
 }
 """
 
@@ -448,45 +418,15 @@ class SRUFunction(Function):
 			block=(thread_per_block, 1, 1), 
 			grid=(num_block, 1, 1))
 
-		# if feature_dimension > 500:	# speed up
-		# 	_dot = 0
-		# 	grad_uz, grad_uf, grad_ur = xp.split(grad_u, 3, axis=1)
-		# 	w_z, w_f, w_r = xp.split(W, 3, axis=0)
-		# 	_dot += xp.dot(grad_uz.transpose((0, 2, 1)), w_z).transpose((0, 2, 1))
-		# 	_dot += xp.dot(grad_uf.transpose((0, 2, 1)), w_f).transpose((0, 2, 1))
-		# 	_dot += xp.dot(grad_ur.transpose((0, 2, 1)), w_r).transpose((0, 2, 1))
-		# else:
-		# 	_dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
-			
-		# _dot = xp.dot(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1))
-		grad_x = xp.matmul(grad_u.transpose((0, 2, 1)), W).transpose((0, 2, 1)) + grad_highway_x
+		col = conv_nd.im2col_nd_gpu(grad_u, (1,), (1,), (0,), cover_all=False)
+		grad_x = xp.tensordot(col, W.T[..., None], ((1, 2), (1, 2))).astype(X.dtype, copy=False).transpose((0, 2, 1)) + grad_highway_x
+		
 		if mask_x is not None:
 			grad_x *= mask_x[..., None]
 
 		grad_b = xp.sum(grad_b, axis=(0, 2))
 
-		# grad_w = xp.broadcast_to(grad_u[..., None, :], (batchsize,) + W.shape + (seq_length,))
-		# grad_w = xp.sum(grad_w * X[:, None, ...], axis=(0, 3))
-
 		grad_w = xp.tensordot(grad_u, self.col, ((0, 2), (0, 3))).astype(W.dtype, copy=False).reshape((feature_dimension * 3, feature_dimension))
-
-		# total_threads = feature_dimension ** 2 * 3 * batchsize
-		# thread_per_block = min(512, total_threads)
-		# num_block = total_threads // thread_per_block + 1
-
-		# self._cuda_elementwise("backward_grad_w", 
-		# 	args=[
-		# 		X.data.ptr,
-		# 		grad_u.data.ptr,
-		# 		grad_w.data.ptr,
-		# 		batchsize,
-		# 		feature_dimension,
-		# 		seq_length
-		# 	], 
-		# 	block=(thread_per_block, 1, 1), 
-		# 	grid=(num_block, 1, 1))
-
-		# grad_w = xp.sum(grad_w, axis=0)
 
 		if len(inputs) == 5:
 			return grad_x, grad_w, grad_b, grad_initial_ct, None

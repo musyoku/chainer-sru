@@ -28,6 +28,8 @@ python3 train.py -b 32 -nf 320 -l 35 -opt msgd -lr 1 -g 0 -e 300 -lrd 30 -nl 2 -
 
 | Model | #layers | d   | Perplexity |
 |-------|---------|-----|------------|
+| LSTM  | 2       | 640 | 89         |
+| SRU   | 2       | 640 | 92         |
 | SRU   | 2       | 320 | 92         |
 | LSTM  | 2       | 320 | 93         |
 | SRU   | 2       | 128 | 110        |
