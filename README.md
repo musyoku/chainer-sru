@@ -37,4 +37,4 @@ python3 train.py -b 32 -nf 320 -l 35 -opt msgd -lr 1 -g 0 -e 300 -lrd 30 -nl 2 -
 
 ## Benchmark
 
-![result](https://github.com/musyoku/images/blob/master/sru/result.png?raw=true)
+![result](https://raw.githubusercontent.com/musyoku/images/master/sru/result.png)

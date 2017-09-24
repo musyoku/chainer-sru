@@ -94,7 +94,8 @@ def main():
 	parser.add_argument("--dropout-embedding-softmax", "-dos", type=float, default=0.5)
 	parser.add_argument("--dropout-rnn", "-dor", type=float, default=0.2)
 	parser.add_argument("--variational-dropout", "-vdo", dest="variational_dropout", action="store_true", default=False)
-	parser.add_argument("--use-tanh", "-tanh", dest="use_tanh", action="store_true", default=False)
+	parser.add_argument("--use-tanh", "-tanh", dest="use_tanh", action="store_true", default=True)
+	parser.add_argument("--use-identity", "-identity", dest="use_tanh", action="store_false")
 	parser.add_argument("--momentum", "-mo", type=float, default=0.9)
 	parser.add_argument("--optimizer", "-opt", type=str, default="msgd")
 	parser.add_argument("--ndim-feature", "-nf", type=int, default=640)
@@ -106,6 +107,7 @@ def main():
 	print("#layers={}".format(args.num_layers))
 	print("d={}".format(args.ndim_feature))
 	print("dropout={}".format("Variational" if args.variational_dropout else "Standard"))
+	print("g={}".format("tanh" if args.use_tanh else "identity"))
 
 	assert args.num_layers > 0
 	assert args.ndim_feature > 0

@@ -419,14 +419,14 @@ class SRUFunction(Function):
 			grid=(num_block, 1, 1))
 
 		col = conv_nd.im2col_nd_gpu(grad_u, (1,), (1,), (0,), cover_all=False)
-		grad_x = xp.tensordot(col, W.T[..., None], ((1, 2), (1, 2))).astype(X.dtype, copy=False).transpose((0, 2, 1)) + grad_highway_x
+		grad_x = xp.tensordot(col, W.T[..., None], ((1, 2), (1, 2))).astype(dtype, copy=False).transpose((0, 2, 1)) + grad_highway_x
 		
 		if mask_x is not None:
 			grad_x *= mask_x[..., None]
 
 		grad_b = xp.sum(grad_b, axis=(0, 2))
 
-		grad_w = xp.tensordot(grad_u, self.col, ((0, 2), (0, 3))).astype(W.dtype, copy=False).reshape((feature_dimension * 3, feature_dimension))
+		grad_w = xp.tensordot(grad_u, self.col, ((0, 2), (0, 3))).astype(dtype, copy=False).reshape((feature_dimension * 3, feature_dimension))
 
 		if len(inputs) == 5:
 			return grad_x, grad_w, grad_b, grad_initial_ct, None
