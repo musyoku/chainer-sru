@@ -17,7 +17,7 @@ args = parser.parse_args()
 cuda.get_device(args.gpu_device).use()
 
 def benchmark_sru(batchsize, seq_length, feature_dimension, repeat=50):
-	layer = SRU(feature_dimension, feature_dimension)
+	layer = SRU(feature_dimension)
 	x_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32) * 5
 	x_data = cuda.to_gpu(x_data)
 	layer.to_gpu()

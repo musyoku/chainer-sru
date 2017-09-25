@@ -21,7 +21,7 @@ class RNN():
 		self.model = nn.Module()
 
 		for _ in range(num_layers):
-			self.model.add(nn.SRU(ndim_feature, ndim_feature, use_tanh, dropout_rnn if variational_dropout else 0))
+			self.model.add(nn.SRU(ndim_feature, use_tanh, dropout_rnn if variational_dropout else 0))
 
 		self.model.embed = nn.EmbedID(vocab_size, ndim_feature)
 		self.model.fc = nn.Convolution1D(ndim_feature, vocab_size)

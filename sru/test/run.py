@@ -156,7 +156,7 @@ def check_forward(batchsize, feature_dimension, seq_length, use_tanh):
 
 	with chainer.no_backprop_mode() and chainer.using_config("train", False):
 		# get true output
-		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh)
+		layer = SRU(feature_dimension, use_tanh=use_tanh)
 		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., :seq_length], layer.W, layer.B, None, layer.use_tanh)
 		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh)
 		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh)
@@ -180,7 +180,7 @@ def check_backward(batchsize, feature_dimension, seq_length, use_tanh):
 
 	with chainer.using_config("train", True):
 		# get true output
-		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh)
+		layer = SRU(feature_dimension, use_tanh=use_tanh)
 		output_true, cell_true, last_cell_true = autograd(x_cpu[..., :seq_length], layer.W, layer.B, None, layer.use_tanh)
 		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh)
 		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length*2:], layer.W, layer.B, last_cell_true, layer.use_tanh)
@@ -253,7 +253,7 @@ def check_dropout_forward(batchsize, feature_dimension, seq_length, use_tanh):
 
 	with chainer.using_config("train", True):
 		# get true output
-		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh, dropout=0.5)
+		layer = SRU(feature_dimension, use_tanh=use_tanh, dropout=0.5)
 		mask_x = layer.generate_dropout_mask(x_cpu_data)
 		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., :seq_length], layer.W, layer.B, None, layer.use_tanh, mask_x)
 		output_true, cell_true, last_cell_true = autograd(x_cpu_data[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_x)
@@ -278,7 +278,7 @@ def check_dropout_backward(batchsize, feature_dimension, seq_length, use_tanh):
 
 	with chainer.using_config("train", True):
 		# get true output
-		layer = SRU(feature_dimension, feature_dimension, use_tanh=use_tanh, dropout=0.5)
+		layer = SRU(feature_dimension, use_tanh=use_tanh, dropout=0.5)
 		mask_x = layer.generate_dropout_mask(x_cpu_data)
 		output_true, cell_true, last_cell_true = autograd(x_cpu[..., :seq_length], layer.W, layer.B, None, layer.use_tanh, mask_x)
 		output_true, cell_true, last_cell_true = autograd(x_cpu[..., seq_length:seq_length*2], layer.W, layer.B, last_cell_true, layer.use_tanh, mask_x)
