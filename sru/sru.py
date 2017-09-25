@@ -439,7 +439,6 @@ def sru(x, W, B, initial_ct, use_tanh=True, mask_x=None):
 	return func(x, W, B, initial_ct, mask_x)
 
 class SRU(link.Link):
-
 	def __init__(self, in_channels, out_channels, use_tanh=True, dropout=0, initialW=None, initial_bias=0):
 		super().__init__()
 		self.in_channels = in_channels
@@ -448,10 +447,20 @@ class SRU(link.Link):
 		self.dropout = dropout
 
 		with self.init_scope():
-			self.W = variable.Parameter(initializers._get_initializer(initialW), (out_channels * 3, in_channels))
+			self.W = variable.Parameter(initializers._get_initializer(initialW))
 			self.B = variable.Parameter(initializers._get_initializer(initial_bias), out_channels * 2)
 
+			if in_channels is not None:
+				self._initialize_params(in_channels)
+
+	def _initialize_params(self, in_channels):
+		self.in_channels = in_channels
+		self.W.initialize((self.out_channels * 3, in_channels))
+
 	def __call__(self, x, initial_ct, mask_x=None):
+		if self.W.data is None:
+			self._initialize_params(x.shape[1])
+
 		batchsize, feature_dimension = x.shape[:2]
 		xp = cuda.get_array_module(x)
 		if initial_ct is None:

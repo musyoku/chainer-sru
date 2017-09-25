@@ -27,7 +27,7 @@ class RNN():
 		self.model.fc = nn.Convolution1D(ndim_feature, vocab_size)
 
 		for param in self.model.params():
-			if param.name == "W":
+			if param.name == "W" and param.data is not None:
 				param.data[...] = np.random.normal(0, 0.01, param.data.shape)
 
 		self.reset_state()
