@@ -17,7 +17,7 @@ args = parser.parse_args()
 
 cuda.get_device(args.gpu_device).use()
 
-def benchmark_musyoku_sru(batchsize, seq_length, feature_dimension, repeat=50):
+def benchmark_chainer_sru(batchsize, seq_length, feature_dimension, repeat=50):
 	layer = SRU(feature_dimension)
 	x_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32)
 	x_data = cuda.to_gpu(x_data)
@@ -41,7 +41,7 @@ def benchmark_musyoku_sru(batchsize, seq_length, feature_dimension, repeat=50):
 
 	return forward_time_mean, backward_time_mean
 
-def benchmark_taolei87_sru(batchsize, seq_length, feature_dimension, repeat=50):
+def benchmark_pytorch_sru(batchsize, seq_length, feature_dimension, repeat=50):
 	with torch.cuda.device(args.gpu_device):
 		layer = SRUCell(feature_dimension, feature_dimension)
 		layer.cuda()
@@ -62,6 +62,36 @@ def benchmark_taolei87_sru(batchsize, seq_length, feature_dimension, repeat=50):
 
 	return forward_time_mean, backward_time_mean
 
+def benchmark_lstm(batchsize, seq_length, feature_dimension, repeat=50):
+	layer = links.LSTM(feature_dimension, feature_dimension)
+	x_data = np.random.normal(0, 1, size=(batchsize, feature_dimension, seq_length)).astype(np.float32) * 5
+	x_data = cuda.to_gpu(x_data)
+	layer.to_gpu()
+
+	with chainer.no_backprop_mode() and chainer.using_config("train", False):
+		# forward
+		start_time = time.time()
+		for i in range(repeat):
+			layer.reset_state()
+			for t in range(seq_length):
+				output = layer(x_data[..., t])
+		forward_time_mean = (time.time() - start_time) / repeat
+
+	with chainer.using_config("train", True):
+		# backward
+		start_time = time.time()
+		for i in range(repeat):
+			layer.reset_state()
+			loss = 0
+			for t in range(seq_length):
+				output = layer(x_data[..., t])
+				loss += output
+			layer.cleargrads()
+			functions.sum(loss).backward()
+		backward_time_mean = (time.time() - start_time) / repeat
+
+	return forward_time_mean, backward_time_mean
+
 def generate_cmap(colors):
 	values = range(len(colors))
 	vmax = np.ceil(np.max(values))
@@ -70,7 +100,7 @@ def generate_cmap(colors):
 		color_list.append( ( v/ vmax, c) )
 	return LinearSegmentedColormap.from_list('custom_cmap', color_list)
 
-def plot(df, title):
+def plot(df, title, filename):
 	sns.set(font_scale=1.5)
 	sns.set_style("whitegrid", {"grid.linestyle": "--"})
 	df.index = ["forward","backward"]
@@ -80,7 +110,7 @@ def plot(df, title):
 	ax.set_title(title)
 	ax.set(xlabel="[ms]")
 	plt.tight_layout()
-	plt.savefig("{}.png".format(title))
+	plt.savefig("{}.png".format(filename))
 	
 def main():
 	batchsize_list = [16, 32]
@@ -88,25 +118,36 @@ def main():
 	feature_dimension_list = [128, 256, 512, 1024]
 
 	# dummy
-	result_musyoku = benchmark_musyoku_sru(16, 16, 128)
-	result_taolei87 = benchmark_taolei87_sru(16, 16, 128)
+	result_chainer = benchmark_chainer_sru(16, 16, 128)
+	result_pytorch = benchmark_pytorch_sru(16, 16, 128)
+	result_lstm = benchmark_lstm(16, 16, 128)
 
 	for batchsize in batchsize_list:
 		for seq_length in seq_length_list:
 			for dimension in feature_dimension_list:
-				result_musyoku = benchmark_musyoku_sru(batchsize, seq_length, dimension)
-				result_taolei87 = benchmark_taolei87_sru(batchsize, seq_length, dimension)
+				result_chainer = benchmark_chainer_sru(batchsize, seq_length, dimension)
+				result_pytorch = benchmark_pytorch_sru(batchsize, seq_length, dimension)
+				result_lstm = benchmark_lstm(batchsize, seq_length, dimension)
 
-				forward_musyoku, backward_musyoku = result_musyoku
-				forward_taolei87, backward_taolei87 = result_taolei87
+				forward_chainer, backward_chainer = result_chainer
+				forward_pytorch, backward_pytorch = result_pytorch
+				forward_lstm, backward_lstm = result_lstm
 
 				df = pd.DataFrame({
-					"taolei87' SRU": [forward_taolei87 * 1000, backward_taolei87 * 1000],
-					"musyoku's SRU": [forward_musyoku * 1000, backward_musyoku * 1000],
+					"PyTorch SRU": [forward_pytorch * 1000, backward_pytorch * 1000],
+					"Chainer SRU": [forward_chainer * 1000, backward_chainer * 1000],
 					})
 
 				title = "l={}, d={}, batchsize={}".format(seq_length, dimension, batchsize)
-				plot(df, title)
+				plot(df, title, "_" + title)
+
+				df = pd.DataFrame({
+					"PyTorch SRU": [forward_pytorch * 1000, backward_pytorch * 1000],
+					"Chainer SRU": [forward_chainer * 1000, backward_chainer * 1000],
+					"Chainer LSTM": [forward_lstm * 1000, backward_lstm * 1000],
+					})
+				df = df.ix[:, ["Chainer LSTM", "Chainer SRU", "PyTorch SRU"]]
+				plot(df, title, title)
 
 if __name__ == '__main__':
 	main()
