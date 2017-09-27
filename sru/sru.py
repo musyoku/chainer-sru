@@ -1,4 +1,5 @@
-import cupy
+from __future__ import division
+import cupy, math
 import numpy as np
 from chainer import link, initializers, variable, cuda, Function, configuration
 from chainer.utils import conv_nd, type_check
@@ -346,7 +347,8 @@ class SRUFunction(Function):
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
-		num_block = total_columns // thread_per_block + 1
+		num_block = math.ceil(total_columns / thread_per_block)
+		assert thread_per_block * num_block >= total_columns
 
 		H = xp.empty((batchsize, feature_dimension, seq_length), dtype=dtype)
 		self.C = xp.empty((batchsize, feature_dimension, seq_length), dtype=dtype)
@@ -386,7 +388,8 @@ class SRUFunction(Function):
 
 		total_columns = feature_dimension * batchsize
 		thread_per_block = min(512, total_columns)
-		num_block = total_columns // thread_per_block + 1
+		num_block = math.ceil(total_columns / thread_per_block)
+		assert thread_per_block * num_block >= total_columns
 
 		grad_x = xp.zeros_like(X)
 		grad_highway_x = xp.zeros_like(X)
@@ -443,7 +446,7 @@ def sru(x, W, B, initial_ct, use_tanh=True, mask_x=None):
 
 class SRU(link.Link):
 	def __init__(self, channels, use_tanh=True, dropout=0, initialW=None, initial_bias=0):
-		super().__init__()
+		super(SRU, self).__init__()
 		self.channels = channels
 		self.use_tanh = use_tanh
 		self.dropout = dropout

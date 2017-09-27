@@ -10,7 +10,6 @@ from optim import Optimizer
 
 class RNN():
 	def __init__(self, vocab_size, ndim_feature, num_layers=2, use_tanh=True, dropout_embedding_softmax=0.75, dropout_rnn=0.2, variational_dropout=False):
-		super(RNN, self).__init__()
 		self.vocab_size = vocab_size
 		self.ndim_feature = ndim_feature
 		self.num_layers = num_layers
@@ -186,7 +185,7 @@ def main():
 		x_sequence = dataset_dev[:-1]
 		t_sequence = dataset_dev[1:]
 		rnn.reset_state()
-		total_iterations_dev = math.ceil(len(x_sequence) / args.seq_length)
+		total_iterations_dev = int(math.ceil(len(x_sequence) / args.seq_length))
 		offset = 0
 		negative_log_likelihood = 0
 		for itr in range(total_iterations_dev):

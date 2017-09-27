@@ -9,6 +9,7 @@
 - [x] Testing
 - [x] Training language models
 - [x] Benchmark
+- [ ] Multi-GPU
 
 ## Requirements
 
